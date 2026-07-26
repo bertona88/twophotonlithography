@@ -1,0 +1,12 @@
+{
+  "name": "twophotonlithography",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Preliminary Setup Universe wrapper for TwoPhotonLithography.",
+  "homepage": "https://twophotonlithography.com/",
+  "scripts": {
+    "prototype:test": "npm --prefix prototype test",
+    "prototype:check": "npm --prefix prototype run check",
+    "prototype:serve": "npm --prefix prototype run serve"
+  }
+}
