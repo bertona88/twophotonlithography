@@ -42,3 +42,8 @@ next-env.d.ts
 /.sites-runtime/
 /outputs/
 /work/
+
+# Rust / WebAssembly build outputs
+/rust/reaction-lens/target/
+/app/wasm/reaction_lens/
+/.wasm-test/

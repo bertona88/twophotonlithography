@@ -1,3 +1,8 @@
+import initReactionLens, {
+  ReactionLensSimulation,
+} from "./wasm/reaction_lens/reaction_lens.js";
+import reactionLensWasmUrl from "./wasm/reaction_lens/reaction_lens_bg.wasm?url";
+
 type LabStage =
   | "model"
   | "slicing"
@@ -53,11 +58,42 @@ const scope = self as unknown as {
 const GRID_W = 112;
 const GRID_H = 68;
 const GRID_N = GRID_W * GRID_H;
+const SNAPSHOT_FIELD_COUNT = 6;
+const SNAPSHOT_LEN = GRID_N * SNAPSHOT_FIELD_COUNT;
 const LENS_W_UM = 15;
-const LENS_H_UM = 9;
-const DX = LENS_W_UM / (GRID_W - 1);
-const DZ = LENS_H_UM / (GRID_H - 1);
-const DT = 0.016;
+const DT_MODEL = 0.016;
+const SEED = 0x07a1;
+const MAX_PENDING_MESSAGES = 64;
+const MIN_HATCH_SPACING_UM = 0.25;
+const MAX_HATCH_LINES_PER_REGION = 256;
+
+type SolverState = "initializing" | "ready" | "error";
+
+type RustDiagnostics = {
+  solver: string;
+  gridWidth: number;
+  gridHeight: number;
+  fieldCount: number;
+  fieldOrder: string[];
+  timestepModelTime?: number;
+  timestepSeconds?: number;
+  exposureStep: number;
+  exposureStepsTotal: number;
+  developmentStep: number;
+  developmentStepsTotal: number;
+  exposureSimulatedModelTime?: number;
+  exposureSimulatedTimeSeconds?: number;
+  developmentSimulatedModelTime?: number;
+  developmentSimulatedTimeSeconds?: number;
+  simulatedModelTime?: number;
+  simulatedTimeSeconds?: number;
+  lightUpdates?: number;
+  darkUpdates?: number;
+  totalUpdates: number;
+  seed: number;
+  checksum: string;
+  ownedMemoryBytes: number;
+};
 
 let params: ModelParams;
 let stage: LabStage = "model";
@@ -68,6 +104,14 @@ let exposureStepsTotal = 1;
 let developmentStep = 0;
 let developmentStepsTotal = 1;
 let pathLength = 0;
+let lensSimulation: ReactionLensSimulation | null = null;
+let wasmMemory: WebAssembly.Memory | null = null;
+let solverState: SolverState = "initializing";
+let solverInitializationError: string | null = null;
+const pendingMessages: Incoming[] = [];
+let rateWindowStartedAt = performance.now();
+let rateWindowUpdates = 0;
+let updatesPerSecond = 0;
 
 let linePositions = new Float32Array(0);
 let macroPositions = new Float32Array(0);
@@ -84,25 +128,122 @@ let macroScratchX = new Float32Array(0);
 let macroScratchDeveloper = new Float32Array(0);
 let macroScratchMass = new Float32Array(0);
 
-let p = new Float32Array(GRID_N);
-let o = new Float32Array(GRID_N);
-let r = new Float32Array(GRID_N);
-let x = new Float32Array(GRID_N);
-let developer = new Float32Array(GRID_N);
-let mass = new Float32Array(GRID_N);
-let p2 = new Float32Array(GRID_N);
-let o2 = new Float32Array(GRID_N);
-let r2 = new Float32Array(GRID_N);
-let x2 = new Float32Array(GRID_N);
-let developer2 = new Float32Array(GRID_N);
-let mass2 = new Float32Array(GRID_N);
-
 function clamp(value: number, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value));
 }
 
 function post(message: unknown, transfer: Transferable[] = []) {
   scope.postMessage(message, transfer);
+}
+
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function postCommandError(command: string, error: unknown) {
+  post({
+    type: "commandError",
+    command,
+    message: errorMessage(error),
+    solver: "Rust/Wasm",
+  });
+}
+
+function validateWorkerParameters(next: ModelParams) {
+  for (const [name, value] of Object.entries(next)) {
+    if (!Number.isFinite(value)) {
+      throw new Error(`${name} must be finite`);
+    }
+  }
+  if (next.layerHeight <= 0) {
+    throw new Error("layerHeight must be greater than zero");
+  }
+  if (next.hatchSpacing < MIN_HATCH_SPACING_UM) {
+    throw new Error(
+      `hatchSpacing must be at least ${MIN_HATCH_SPACING_UM} µm`,
+    );
+  }
+  if (next.contourCount < 0) {
+    throw new Error("contourCount must not be negative");
+  }
+  if (next.contourCount > 64) {
+    throw new Error("contourCount must not exceed 64");
+  }
+}
+
+function requireLensSimulation() {
+  if (!lensSimulation) {
+    throw new Error("Rust/Wasm simulation has not been configured");
+  }
+  return lensSimulation;
+}
+
+function applyLensParameters(next: ModelParams) {
+  validateWorkerParameters(next);
+  if (lensSimulation) {
+    lensSimulation.set_parameters(next);
+    return;
+  }
+  lensSimulation = new ReactionLensSimulation(
+    {
+      exposureStepsTotal: Math.max(1, exposureStepsTotal),
+      parameters: next,
+    },
+    SEED,
+  );
+}
+
+function resetUpdateRate() {
+  rateWindowStartedAt = performance.now();
+  rateWindowUpdates = 0;
+  updatesPerSecond = 0;
+}
+
+function recordSimulationUpdates(count: number) {
+  rateWindowUpdates += count;
+  const now = performance.now();
+  const elapsedMilliseconds = now - rateWindowStartedAt;
+  if (elapsedMilliseconds >= 250) {
+    updatesPerSecond =
+      elapsedMilliseconds > 0
+        ? (rateWindowUpdates * 1000) / elapsedMilliseconds
+        : 0;
+    rateWindowStartedAt = now;
+    rateWindowUpdates = 0;
+  }
+}
+
+function normalizedDiagnostics(raw: RustDiagnostics) {
+  const timestepModel =
+    raw.timestepModelTime ?? raw.timestepSeconds ?? DT_MODEL;
+  const exposureSimulatedModelTime =
+    raw.exposureSimulatedModelTime ??
+    raw.exposureSimulatedTimeSeconds ??
+    raw.exposureStep * timestepModel;
+  const developmentSimulatedModelTime =
+    raw.developmentSimulatedModelTime ??
+    raw.developmentSimulatedTimeSeconds ??
+    0;
+  const simulatedModelTime =
+    raw.simulatedModelTime ??
+    raw.simulatedTimeSeconds ??
+    exposureSimulatedModelTime + developmentSimulatedModelTime;
+
+  return {
+    ...raw,
+    timestepModel,
+    exposureSimulatedModelTime,
+    developmentSimulatedModelTime,
+    simulatedModelTime,
+    updatesPerSecond,
+    wasmMemoryBytes: wasmMemory?.buffer.byteLength ?? 0,
+  };
 }
 
 function distance3(
@@ -114,6 +255,20 @@ function distance3(
   bz: number,
 ) {
   return Math.hypot(ax - bx, ay - by, az - bz);
+}
+
+function hatchLineBudget(radius: number, spacing: number) {
+  const budget = Math.ceil((radius * 2) / spacing) + 2;
+  if (
+    !Number.isSafeInteger(budget) ||
+    budget < 1 ||
+    budget > MAX_HATCH_LINES_PER_REGION
+  ) {
+    throw new Error(
+      `Hatch region requires an unsupported number of lines (${budget})`,
+    );
+  }
+  return budget;
 }
 
 function addSegment(
@@ -198,8 +353,14 @@ function hatchEllipse(
   const vx = -uy;
   const vy = ux;
   const radius = Math.hypot(rx, ry);
+  const lineBudget = hatchLineBudget(radius, spacing);
+  let lineCount = 0;
 
   for (let offset = -radius; offset <= radius; offset += spacing) {
+    if (lineCount >= lineBudget) {
+      throw new Error("Hatch ellipse exceeded its bounded line budget");
+    }
+    lineCount += 1;
     let start: [number, number, number] | null = null;
     let previous: [number, number, number] | null = null;
     const samples = 90;
@@ -245,8 +406,14 @@ function hatchRectangle(
   const cx = (x0 + x1) / 2;
   const cy = (y0 + y1) / 2;
   const radius = Math.hypot(x1 - x0, y1 - y0) / 2;
+  const lineBudget = hatchLineBudget(radius, spacing);
+  let lineCount = 0;
 
   for (let offset = -radius; offset <= radius; offset += spacing) {
+    if (lineCount >= lineBudget) {
+      throw new Error("Hatch rectangle exceeded its bounded line budget");
+    }
+    lineCount += 1;
     let start: [number, number, number] | null = null;
     let previous: [number, number, number] | null = null;
     const samples = 96;
@@ -267,6 +434,7 @@ function hatchRectangle(
 }
 
 function sliceBenchy(next: ModelParams) {
+  applyLensParameters(next);
   params = next;
   stage = "slicing";
   pathLength = 0;
@@ -409,19 +577,6 @@ function sliceBenchy(next: ModelParams) {
 }
 
 function resetFields() {
-  p.fill(params?.initiator ?? 1);
-  o.fill(params?.oxygen ?? 1);
-  r.fill(0);
-  x.fill(0);
-  developer.fill(0);
-  mass.fill(1);
-  p2.fill(0);
-  o2.fill(0);
-  r2.fill(0);
-  x2.fill(0);
-  developer2.fill(0);
-  mass2.fill(1);
-
   const count = Math.floor(macroPositions.length / 3);
   macroP = new Float32Array(count).fill(params?.initiator ?? 1);
   macroO = new Float32Array(count).fill(params?.oxygen ?? 1);
@@ -446,88 +601,10 @@ function resetFields() {
     ),
   );
   developmentStepsTotal = 210;
-}
-
-function swapLensBuffers() {
-  [p, p2] = [p2, p];
-  [o, o2] = [o2, o];
-  [r, r2] = [r2, r];
-  [x, x2] = [x2, x];
-}
-
-function laplacian(field: Float32Array, index: number, ix: number, iz: number) {
-  const left = field[index - (ix > 0 ? 1 : 0)];
-  const right = field[index + (ix < GRID_W - 1 ? 1 : 0)];
-  const down = field[index - (iz > 0 ? GRID_W : 0)];
-  const up = field[index + (iz < GRID_H - 1 ? GRID_W : 0)];
-  return (
-    (left + right - field[index] * 2) / (DX * DX) +
-    (down + up - field[index] * 2) / (DZ * DZ)
-  );
-}
-
-function stepLens(progress: number) {
-  const phase = (progress * Math.max(1, params.passes) * 8.2) % 1;
-  const focusX = (phase - 0.5) * LENS_W_UM * 0.78;
-  const focusZ = Math.sin(progress * Math.PI * 7) * 0.72;
-  const waist = Math.max(0.2, (0.36 * params.wavelength) / 780 / params.na);
-  const axial = waist * 3.1;
-  const sourceScale =
-    4 *
-    Math.pow(params.power / 16, 2) *
-    (80 / params.repetitionRate) *
-    (100 / params.pulseDuration) *
-    (45 / params.speed);
-
-  for (let iz = 0; iz < GRID_H; iz += 1) {
-    const zPos = (iz / (GRID_H - 1) - 0.5) * LENS_H_UM;
-    for (let ix = 0; ix < GRID_W; ix += 1) {
-      const index = iz * GRID_W + ix;
-      const xPos = (ix / (GRID_W - 1) - 0.5) * LENS_W_UM;
-      const radial = (xPos - focusX) / waist;
-      const axialDistance = (zPos - focusZ) / axial;
-      const psi = Math.exp(-2 * (radial * radial + axialDistance * axialDistance));
-      const source = sourceScale * psi * psi;
-      const lp = laplacian(p, index, ix, iz);
-      const lo = laplacian(o, index, ix, iz);
-      const lr = laplacian(r, index, ix, iz);
-      const radicalLoss =
-        (params.darkLoss + params.oxygenQuench * o[index]) * r[index] +
-        params.termination * r[index] * r[index];
-      p2[index] = clamp(
-        p[index] +
-          DT * (params.piDiffusion * lp - params.piDepletion * source * p[index]),
-        0,
-        params.initiator,
-      );
-      r2[index] = clamp(
-        r[index] +
-          DT *
-            (params.radicalDiffusion * lr +
-              params.radicalYield * source * p[index] -
-              radicalLoss),
-        0,
-        8,
-      );
-      o2[index] = clamp(
-        o[index] +
-          DT *
-            (params.oxygenDiffusion * lo -
-              0.2 * params.oxygenQuench * o[index] * r[index]),
-        0,
-        params.oxygen,
-      );
-      x2[index] = clamp(
-        x[index] + DT * params.propagation * r[index] * (1 - x[index]),
-      );
-
-      if (ix === 0 || iz === 0 || ix === GRID_W - 1 || iz === GRID_H - 1) {
-        p2[index] = params.initiator;
-        o2[index] = params.oxygen;
-      }
-    }
-  }
-  swapLensBuffers();
+  const simulation = requireLensSimulation();
+  simulation.set_exposure_steps_total(exposureStepsTotal);
+  simulation.reset(SEED);
+  resetUpdateRate();
 }
 
 function stepMacro(progress: number) {
@@ -601,7 +678,7 @@ function stepMacro(progress: number) {
 
     macroScratchP[index] = clamp(
       macroP[index] +
-        DT *
+        DT_MODEL *
           (params.piDiffusion * lapP -
             params.piDepletion * source * macroP[index]),
       0,
@@ -609,7 +686,7 @@ function stepMacro(progress: number) {
     );
     macroScratchR[index] = clamp(
       macroR[index] +
-        DT *
+        DT_MODEL *
           (params.radicalDiffusion * lapR +
             params.radicalYield * source * macroP[index] -
             radicalLoss),
@@ -618,7 +695,7 @@ function stepMacro(progress: number) {
     );
     macroScratchO[index] = clamp(
       macroO[index] +
-        DT *
+        DT_MODEL *
           (params.oxygenDiffusion * lapO +
             params.oxygenDiffusion * 0.012 * (params.oxygen - macroO[index]) -
             0.2 * params.oxygenQuench * macroO[index] * macroR[index]),
@@ -627,7 +704,7 @@ function stepMacro(progress: number) {
     );
     macroScratchX[index] = clamp(
       macroX[index] +
-        DT * params.propagation * macroR[index] * (1 - macroX[index]),
+        DT_MODEL * params.propagation * macroR[index] * (1 - macroX[index]),
     );
   }
 
@@ -639,12 +716,19 @@ function stepMacro(progress: number) {
 
 function runExposureBatch() {
   const batch = 34;
-  for (let step = 0; step < batch && exposureStep < exposureStepsTotal; step += 1) {
-    const progress = exposureStep / Math.max(1, exposureStepsTotal - 1);
-    stepLens(progress);
+  const requestedSteps = Math.max(
+    0,
+    Math.min(batch, exposureStepsTotal - exposureStep),
+  );
+  const advancedSteps =
+    requireLensSimulation().advance_exposure_steps(requestedSteps);
+  for (let step = 0; step < advancedSteps; step += 1) {
+    const progress =
+      (exposureStep + step) / Math.max(1, exposureStepsTotal - 1);
     stepMacro(progress);
-    exposureStep += 1;
   }
+  exposureStep += advancedSteps;
+  recordSimulationUpdates(advancedSteps);
 
   if (exposureStep >= exposureStepsTotal) {
     stage = "paused";
@@ -657,51 +741,13 @@ function runDevelopmentBatch() {
   const batch = 6;
   const dtDevelopment =
     params.developmentTime / Math.max(1, developmentStepsTotal);
-  const maxDeveloperDiffusivity = 0.114;
-  const stableDt =
-    0.45 /
-    (maxDeveloperDiffusivity *
-      (1 / (DX * DX) + 1 / (DZ * DZ)));
-  const substeps = Math.max(1, Math.ceil(dtDevelopment / stableDt));
-  const subDt = dtDevelopment / substeps;
-
-  for (
-    let step = 0;
-    step < batch && developmentStep < developmentStepsTotal;
-    step += 1
-  ) {
-    for (let substep = 0; substep < substeps; substep += 1) {
-      for (let iz = 0; iz < GRID_H; iz += 1) {
-        for (let ix = 0; ix < GRID_W; ix += 1) {
-          const index = iz * GRID_W + ix;
-          const gel = Math.pow(
-            clamp((x[index] - params.gelPoint) / (1 - params.gelPoint)),
-            0.7,
-          );
-          const diffusivity =
-            0.014 + 0.08 * (1 - mass[index]) + 0.02 * Math.exp(-3 * gel);
-          const lapDeveloper = laplacian(developer, index, ix, iz);
-          developer2[index] = clamp(
-            developer[index] + subDt * diffusivity * lapDeveloper,
-          );
-          mass2[index] = clamp(
-            mass[index] -
-              subDt *
-                params.developerRate *
-                Math.exp(-params.developerResistance * gel) *
-                developer[index] *
-                mass[index],
-          );
-
-          if (ix === 0 || iz === 0 || ix === GRID_W - 1 || iz === GRID_H - 1) {
-            developer2[index] = 1;
-          }
-        }
-      }
-      [developer, developer2] = [developer2, developer];
-      [mass, mass2] = [mass2, mass];
-    }
-
+  const requestedSteps = Math.min(
+    batch,
+    Math.max(0, developmentStepsTotal - developmentStep),
+  );
+  const advancedSteps =
+    requireLensSimulation().advance_development_steps(requestedSteps);
+  for (let step = 0; step < advancedSteps; step += 1) {
     for (let index = 0; index < macroMass.length; index += 1) {
       const offset = index * 3;
       const previous = Math.max(0, index - 1);
@@ -761,6 +807,7 @@ function runDevelopmentBatch() {
     [macroMass, macroScratchMass] = [macroScratchMass, macroMass];
     developmentStep += 1;
   }
+  recordSimulationUpdates(advancedSteps);
 
   if (developmentStep >= developmentStepsTotal) {
     stage = "complete";
@@ -773,7 +820,10 @@ function startExposure() {
   if (macroPositions.length === 0) return;
   stage = "exposing";
   stopTimer();
-  timer = setInterval(runExposureBatch, 46);
+  timer = setInterval(
+    () => runScheduledCommand("advanceExposure", runExposureBatch),
+    46,
+  );
   emitSnapshot();
 }
 
@@ -781,7 +831,10 @@ function startDevelopment() {
   if (macroPositions.length === 0) return;
   stage = "developing";
   stopTimer();
-  timer = setInterval(runDevelopmentBatch, 48);
+  timer = setInterval(
+    () => runScheduledCommand("advanceDevelopment", runDevelopmentBatch),
+    48,
+  );
   emitSnapshot();
 }
 
@@ -792,31 +845,47 @@ function stopTimer() {
   }
 }
 
-function hashState() {
-  let hash = 2166136261;
-  const parameterValues = Object.values(params);
-  for (const value of parameterValues) {
-    hash ^= Math.round(value * 1_000_000);
-    hash = Math.imul(hash, 16777619);
+function runScheduledCommand(command: string, callback: () => void) {
+  try {
+    callback();
+  } catch (error) {
+    stopTimer();
+    stage = "paused";
+    postCommandError(command, error);
   }
-  hash ^= Math.round(pathLength * 1000);
-  hash = Math.imul(hash, 16777619);
-  hash ^= linePositions.length;
-  hash = Math.imul(hash, 16777619);
-  for (let index = 0; index < macroX.length; index += 1) {
-    hash ^= Math.round(macroX[index] * 65535);
-    hash = Math.imul(hash, 16777619);
-    hash ^= Math.round(macroO[index] * 65535);
-    hash = Math.imul(hash, 16777619);
-    hash ^= Math.round(macroMass[index] * 65535);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-function emitSnapshot() {
-  const lens = new Uint8Array(GRID_N * 4);
+function readLensSnapshot() {
+  const simulation = requireLensSimulation();
+  if (!wasmMemory) {
+    throw new Error("Rust/Wasm memory is unavailable");
+  }
+
+  const pointer = simulation.get_snapshot();
+  const snapshotLength = simulation.snapshot_len();
+  if (snapshotLength !== SNAPSHOT_LEN) {
+    throw new Error(
+      `Rust/Wasm snapshot length ${snapshotLength} does not match ${SNAPSHOT_LEN}`,
+    );
+  }
+
+  // wasm-bindgen may grow (and therefore replace) the memory buffer. Reacquire
+  // it after get_snapshot(), then copy only into JS-owned storage. The main
+  // thread never receives a view into authoritative Wasm state.
+  const memoryBuffer = wasmMemory.buffer;
+  if (
+    pointer + snapshotLength * Float32Array.BYTES_PER_ELEMENT >
+    memoryBuffer.byteLength
+  ) {
+    throw new Error("Rust/Wasm snapshot points outside linear memory");
+  }
+  const fields = new Float32Array(memoryBuffer, pointer, snapshotLength);
   const oxygenScale = Math.max(1e-6, params.oxygen);
+  const lens = new Uint8Array(GRID_N * 4);
+  const oxygenOffset = GRID_N;
+  const radicalOffset = GRID_N * 2;
+  const conversionOffset = GRID_N * 3;
+  const massOffset = GRID_N * 5;
   let oxygenMean = 0;
   let conversionMean = 0;
   let radicalMax = 0;
@@ -824,27 +893,67 @@ function emitSnapshot() {
   let surviving = 0;
 
   for (let index = 0; index < GRID_N; index += 1) {
-    lens[index * 4] = Math.round(clamp(o[index] / oxygenScale) * 255);
-    lens[index * 4 + 1] = Math.round(clamp(Math.log1p(r[index]) / Math.log(5)) * 255);
-    lens[index * 4 + 2] = Math.round(clamp(x[index]) * 255);
-    lens[index * 4 + 3] = Math.round(clamp(mass[index]) * 255);
+    const oxygen = fields[oxygenOffset + index];
+    const radical = fields[radicalOffset + index];
+    const conversion = fields[conversionOffset + index];
+    const remainingMass = fields[massOffset + index];
+    lens[index * 4] = Math.round(
+      clamp(oxygen / oxygenScale) * 255,
+    );
+    lens[index * 4 + 1] = Math.round(
+      clamp(Math.log1p(radical) / Math.log(5)) * 255,
+    );
+    lens[index * 4 + 2] = Math.round(clamp(conversion) * 255);
+    lens[index * 4 + 3] = Math.round(clamp(remainingMass) * 255);
+    oxygenMean += oxygen / oxygenScale;
+    conversionMean += conversion;
+    radicalMax = Math.max(radicalMax, radical);
+    if (conversion >= params.gelPoint) gelled += 1;
+    if (remainingMass >= 0.5) surviving += 1;
   }
+
+  const diagnostics = normalizedDiagnostics(
+    simulation.get_diagnostics() as RustDiagnostics,
+  );
+  if (
+    diagnostics.gridWidth !== GRID_W ||
+    diagnostics.gridHeight !== GRID_H ||
+    diagnostics.fieldCount !== SNAPSHOT_FIELD_COUNT
+  ) {
+    throw new Error(
+      "Rust/Wasm diagnostics do not match the worker snapshot contract",
+    );
+  }
+  return {
+    lens,
+    diagnostics,
+    lensStatistics: {
+      oxygenMean: oxygenMean / GRID_N,
+      conversionMean: conversionMean / GRID_N,
+      radicalMax,
+      gelledFraction: gelled / GRID_N,
+      survivingFraction: surviving / GRID_N,
+    },
+  };
+}
+
+function emitSnapshot() {
+  const { lens, diagnostics, lensStatistics } = readLensSnapshot();
+  const oxygenScale = Math.max(1e-6, params.oxygen);
 
   const conversion = new Uint8Array(macroX.length);
   const oxygen = new Uint8Array(macroO.length);
+  const radicals = new Uint8Array(macroR.length);
   const remaining = new Uint8Array(macroMass.length);
   for (let index = 0; index < macroX.length; index += 1) {
     conversion[index] = Math.round(clamp(macroX[index]) * 255);
     oxygen[index] = Math.round(clamp(macroO[index] / oxygenScale) * 255);
+    radicals[index] = Math.round(
+      clamp(Math.log1p(macroR[index]) / Math.log(5)) * 255,
+    );
     remaining[index] = Math.round(clamp(macroMass[index]) * 255);
-    oxygenMean += macroO[index] / oxygenScale;
-    conversionMean += macroX[index];
-    radicalMax = Math.max(radicalMax, macroR[index]);
-    if (macroX[index] >= params.gelPoint) gelled += 1;
-    if (macroMass[index] >= 0.5) surviving += 1;
   }
 
-  const count = Math.max(1, macroX.length);
   const exposureProgress = clamp(exposureStep / exposureStepsTotal);
   const developmentProgress = clamp(developmentStep / developmentStepsTotal);
   const focusIndex =
@@ -884,27 +993,30 @@ function emitSnapshot() {
       lensHeight: GRID_H,
       conversion: conversion.buffer,
       oxygen: oxygen.buffer,
+      radicals: radicals.buffer,
       remaining: remaining.buffer,
+      diagnostics,
       metrics: {
-        oxygenMean: oxygenMean / count,
-        conversionMean: conversionMean / count,
-        radicalMax,
-        gelledFraction: gelled / count,
-        survivingFraction: surviving / count,
+        ...lensStatistics,
         pulseEnergyPj,
         peakPowerW:
           pulseEnergyPj * 1e-12 / Math.max(1e-15, params.pulseDuration * 1e-15),
-        checksum: hashState(),
-        cellSizeNm: Math.round(DX * 1000),
-        timestepUs: Math.round(DT * 1000),
+        checksum: diagnostics.checksum,
+        cellSizeNm: Math.round((LENS_W_UM / (GRID_W - 1)) * 1000),
+        timestepModel: diagnostics.timestepModel,
       },
     },
-    [lens.buffer, conversion.buffer, oxygen.buffer, remaining.buffer],
+    [
+      lens.buffer,
+      conversion.buffer,
+      oxygen.buffer,
+      radicals.buffer,
+      remaining.buffer,
+    ],
   );
 }
 
-scope.onmessage = (event) => {
-  const message = event.data;
+function processMessage(message: Incoming) {
   if (message.type === "slice") {
     stopTimer();
     sliceBenchy(message.params);
@@ -912,6 +1024,7 @@ scope.onmessage = (event) => {
   }
   if (message.type === "configure") {
     stopTimer();
+    applyLensParameters(message.params);
     params = message.params;
     resetFields();
     stage = macroPositions.length ? "ready" : "model";
@@ -945,5 +1058,106 @@ scope.onmessage = (event) => {
     resetFields();
     stage = macroPositions.length ? "ready" : "model";
     emitSnapshot();
+    return;
   }
+  const unsupported = message as { type?: unknown };
+  throw new Error(
+    `Unsupported simulation command: ${String(unsupported.type ?? "unknown")}`,
+  );
+}
+
+function processMessageSafely(message: Incoming) {
+  try {
+    processMessage(message);
+  } catch (error) {
+    stopTimer();
+    if (stage === "exposing" || stage === "developing") {
+      stage = "paused";
+    }
+    postCommandError(message.type, error);
+  }
+}
+
+scope.onmessage = (event) => {
+  const candidate = event.data as unknown;
+  if (
+    !candidate ||
+    typeof candidate !== "object" ||
+    typeof (candidate as { type?: unknown }).type !== "string"
+  ) {
+    postCommandError("unknown", "Simulation command must include a string type");
+    return;
+  }
+  const message = candidate as Incoming;
+  if (solverState === "ready") {
+    processMessageSafely(message);
+    return;
+  }
+  if (solverState === "error") {
+    postCommandError(
+      message.type,
+      solverInitializationError ?? "Rust/Wasm initialization failed",
+    );
+    return;
+  }
+  if (pendingMessages.length >= MAX_PENDING_MESSAGES) {
+    postCommandError(
+      message.type,
+      "Rust/Wasm is still initializing and the command queue is full",
+    );
+    return;
+  }
+  pendingMessages.push(message);
 };
+
+async function initializeSolver() {
+  post({
+    type: "solverStatus",
+    status: "initializing",
+    solver: "Rust/Wasm",
+  });
+  try {
+    const initialized = await initReactionLens({
+      module_or_path: reactionLensWasmUrl,
+    });
+    const memory = initialized.memory;
+    wasmMemory = memory;
+    solverState = "ready";
+    post({
+      type: "solverStatus",
+      status: "ready",
+      solver: "Rust/Wasm",
+      diagnostics: {
+        solver: "Rust/Wasm",
+        gridWidth: GRID_W,
+        gridHeight: GRID_H,
+        timestepModel: DT_MODEL,
+        updatesPerSecond: 0,
+        simulatedModelTime: 0,
+        wasmMemoryBytes: memory.buffer.byteLength,
+        checksum: "00000000",
+      },
+    });
+
+    const queuedMessages = pendingMessages.splice(0);
+    for (const message of queuedMessages) {
+      processMessageSafely(message);
+    }
+  } catch (error) {
+    stopTimer();
+    solverState = "error";
+    solverInitializationError = errorMessage(error);
+    post({
+      type: "solverStatus",
+      status: "error",
+      solver: "Rust/Wasm",
+      message: solverInitializationError,
+    });
+    const rejectedMessages = pendingMessages.splice(0);
+    for (const message of rejectedMessages) {
+      postCommandError(message.type, solverInitializationError);
+    }
+  }
+}
+
+void initializeSolver();

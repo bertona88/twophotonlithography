@@ -11,6 +11,7 @@ type LabViewportProps = {
   macroPositions: Float32Array | null;
   conversion: Uint8Array | null;
   oxygen: Uint8Array | null;
+  radicals: Uint8Array | null;
   remaining: Uint8Array | null;
   focus: [number, number, number];
   progress: number;
@@ -397,6 +398,7 @@ export default function LabViewport({
   macroPositions,
   conversion,
   oxygen,
+  radicals,
   remaining,
   focus,
   progress,
@@ -467,6 +469,7 @@ export default function LabViewport({
     for (let index = 0; index < conversion.length; index += 1) {
       const conversionValue = conversion[index] / 255;
       const oxygenValue = (oxygen?.[index] ?? 255) / 255;
+      const radicalValue = (radicals?.[index] ?? 0) / 255;
       const remainingValue = (remaining?.[index] ?? 255) / 255;
 
       if (fieldMode === "oxygen") {
@@ -476,12 +479,8 @@ export default function LabViewport({
         color.copy(DARK).lerp(IVORY, remainingValue * conversionValue);
         visible ||= stage === "developing" || stage === "complete";
       } else if (fieldMode === "radicals") {
-        const reactionProxy = Math.max(
-          0,
-          conversionValue * (1 - conversionValue) * 3.2,
-        );
-        color.copy(DARK).lerp(GOLD, reactionProxy);
-        visible ||= reactionProxy > 0.03;
+        color.copy(DARK).lerp(GOLD, radicalValue);
+        visible ||= radicalValue > 0.03;
       } else if (conversionValue >= 0.3 && remainingValue > 0.2) {
         const gel = clamp01((conversionValue - 0.3) / 0.7);
         color.copy(AMBER).lerp(IVORY, gel * remainingValue);
@@ -494,7 +493,15 @@ export default function LabViewport({
     }
     colorAttribute.needsUpdate = true;
     handles.materialPoints.visible = visible;
-  }, [conversion, oxygen, remaining, fieldMode, macroPositions, stage]);
+  }, [
+    conversion,
+    oxygen,
+    radicals,
+    remaining,
+    fieldMode,
+    macroPositions,
+    stage,
+  ]);
 
   useEffect(() => {
     const handles = handlesRef.current;

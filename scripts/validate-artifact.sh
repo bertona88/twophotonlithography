@@ -9,6 +9,7 @@ fi
 
 worker="${SITES_PROJECT_ROOT}/dist/server/index.js"
 hosting="${SITES_PROJECT_ROOT}/dist/.openai/hosting.json"
+wasm="$(find "${SITES_PROJECT_ROOT}/dist/client" -type f -name '*.wasm' -print -quit 2>/dev/null || true)"
 
 [[ -f "${worker}" ]] || {
   echo "Missing Sites Worker entry: dist/server/index.js" >&2
@@ -17,6 +18,16 @@ hosting="${SITES_PROJECT_ROOT}/dist/.openai/hosting.json"
 [[ -f "${hosting}" ]] || {
   echo "Missing packaged Sites manifest: dist/.openai/hosting.json" >&2
   exit 66
+}
+[[ -n "${wasm}" && -f "${wasm}" ]] || {
+  echo "Missing compiled Rust/Wasm client asset under dist/client." >&2
+  exit 66
+}
+
+magic="$(od -An -tx1 -N4 "${wasm}" | tr -d '[:space:]')"
+[[ "${magic}" == "0061736d" ]] || {
+  echo "Invalid WebAssembly magic bytes in ${wasm}." >&2
+  exit 65
 }
 
 node --input-type=module - "${worker}" "${hosting}" <<'NODE'
@@ -34,4 +45,4 @@ if (!worker.default || typeof worker.default.fetch !== "function") {
 }
 NODE
 
-echo "Validated Sites artifact: ESM Worker default.fetch and hosting manifest are present."
+echo "Validated Sites artifact: ESM Worker, hosting manifest, and Rust/Wasm client asset are present."
