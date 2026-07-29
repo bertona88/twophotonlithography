@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll GitHub for twophotonlithography deployments
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=3min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=twophotonlithography-deploy.service
+
+[Install]
+WantedBy=timers.target

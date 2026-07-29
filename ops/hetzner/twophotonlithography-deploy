@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+REPO_URL="https://github.com/bertona88/twophotonlithography.git"
+BRANCH="main"
+SITE_URL="https://twophotonlithography.com"
+HEALTH_URL="http://127.0.0.1:45180/"
+
+DEPLOY_ROOT="/var/lib/twophotonlithography-deploy"
+REPO_DIR="${DEPLOY_ROOT}/repo"
+STATE_FILE="${DEPLOY_ROOT}/deployed-revision"
+RELEASES_DIR="/srv/twophotonlithography-releases"
+LIVE_LINK="/srv/twophotonlithography/current"
+LIVE_PARENT="$(dirname "$LIVE_LINK")"
+LOCK_FILE="/run/twophotonlithography-deploy.lock"
+
+force=0
+dry_run=0
+init_state=0
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --force)
+      force=1
+      ;;
+    --dry-run)
+      dry_run=1
+      ;;
+    --init-state)
+      init_state=1
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+log() {
+  printf '[twophotonlithography-deploy] %s\n' "$*"
+}
+
+rollback() {
+  local previous_target="$1"
+  if [ -n "$previous_target" ] && [ -d "$previous_target" ]; then
+    log "health check failed; rolling back to ${previous_target}"
+    ln -sfn "$previous_target" "${LIVE_LINK}.next"
+    mv -Tf "${LIVE_LINK}.next" "$LIVE_LINK"
+    systemctl restart twophotonlithography.service
+  else
+    log "health check failed and no previous release is available"
+    systemctl stop twophotonlithography.service || true
+  fi
+}
+
+mkdir -p "$DEPLOY_ROOT" "$RELEASES_DIR" "$LIVE_PARENT"
+
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  log "another deploy is already running"
+  exit 0
+fi
+
+if [ ! -d "${REPO_DIR}/.git" ]; then
+  log "cloning ${REPO_URL}"
+  rm -rf "${REPO_DIR}.tmp"
+  git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "${REPO_DIR}.tmp"
+  mv "${REPO_DIR}.tmp" "$REPO_DIR"
+fi
+
+cd "$REPO_DIR"
+git fetch --depth 1 origin "$BRANCH"
+remote_revision="$(git rev-parse FETCH_HEAD)"
+deployed_revision="$(cat "$STATE_FILE" 2>/dev/null || true)"
+
+if [ "$init_state" -eq 1 ]; then
+  printf '%s\n' "$remote_revision" > "${STATE_FILE}.tmp"
+  mv "${STATE_FILE}.tmp" "$STATE_FILE"
+  log "initialized deployed revision to ${remote_revision}"
+  exit 0
+fi
+
+if [ "$force" -eq 0 ] && [ "$remote_revision" = "$deployed_revision" ]; then
+  log "no changes at ${remote_revision}"
+  exit 0
+fi
+
+log "building ${remote_revision}"
+git reset --hard "$remote_revision"
+git clean -ffd -e node_modules -e .sites-runtime
+
+export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=2048}"
+export SITE_URL
+nice -n 10 npm run install:ci
+nice -n 10 npm test
+
+if [ "$dry_run" -eq 1 ]; then
+  log "dry run built ${remote_revision}; live service was not changed"
+  exit 0
+fi
+
+release_dir="${RELEASES_DIR}/${remote_revision}"
+rm -rf "${release_dir}.tmp" "$release_dir"
+mkdir -p "${release_dir}.tmp"
+
+rsync -a \
+  --exclude='.git' \
+  --exclude='.sites-runtime' \
+  --exclude='dist' \
+  --exclude='node_modules' \
+  "${REPO_DIR}/" "${release_dir}.tmp/"
+cp -a "${REPO_DIR}/dist" "${release_dir}.tmp/dist"
+cp -al "${REPO_DIR}/node_modules" "${release_dir}.tmp/node_modules"
+mv "${release_dir}.tmp" "$release_dir"
+
+previous_target="$(readlink -f "$LIVE_LINK" 2>/dev/null || true)"
+ln -sfn "$release_dir" "${LIVE_LINK}.next"
+mv -Tf "${LIVE_LINK}.next" "$LIVE_LINK"
+
+systemctl restart twophotonlithography.service
+if ! curl \
+  --fail \
+  --silent \
+  --show-error \
+  --retry 20 \
+  --retry-all-errors \
+  --retry-delay 1 \
+  "$HEALTH_URL" |
+  grep -F 'Two‑Photon Lithography' >/dev/null; then
+  rollback "$previous_target"
+  exit 1
+fi
+
+printf '%s\n' "$remote_revision" > "${STATE_FILE}.tmp"
+mv "${STATE_FILE}.tmp" "$STATE_FILE"
+
+find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \
+  | sort -rn \
+  | awk 'NR > 5 {print $2}' \
+  | xargs -r rm -rf
+
+log "deployed ${remote_revision}"

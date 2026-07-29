@@ -1,0 +1,12 @@
+[Unit]
+Description=Deploy twophotonlithography from GitHub
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/twophotonlithography-deploy
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=3G
+TimeoutStartSec=10min

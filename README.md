@@ -3,7 +3,7 @@
 An interactive browser laboratory that connects a sliced Micro-Benchy exposure
 path to a deterministic reaction–diffusion polymerization simulation.
 
-[Open the live lab](https://tpl-reaction-lab.abertoncini.chatgpt.site)
+[Open the live lab](https://twophotonlithography.com)
 
 ## What is implemented
 
@@ -74,3 +74,10 @@ npm run validate:artifact
 The current solver is TypeScript and runs in a Web Worker. Arbitrary STL
 slicing, multiscale refinement, resin calibration, and a Rust/Wasm reference
 solver are planned extensions rather than claims of this release.
+
+## Production deployment
+
+Pushes to `main` are deployed automatically to the existing Hetzner VPS. The
+server polls GitHub approximately every three minutes, builds and tests the
+exact revision, switches releases atomically, and rolls back if the local
+health check fails. See [`ops/hetzner/README.md`](ops/hetzner/README.md).

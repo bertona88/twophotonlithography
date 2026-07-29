@@ -1,0 +1,28 @@
+[Unit]
+Description=Two-Photon Lithography Lab
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=twophotonlithography
+Group=twophotonlithography
+WorkingDirectory=/srv/twophotonlithography/current
+Environment=NODE_ENV=production
+Environment=HOME=/var/lib/twophotonlithography-runtime
+Environment=WRANGLER_WRITE_LOGS=false
+Environment=WRANGLER_LOG_PATH=/var/lib/twophotonlithography-runtime/wrangler.log
+Environment=MINIFLARE_REGISTRY_PATH=/var/lib/twophotonlithography-runtime/registry
+ExecStart=/srv/twophotonlithography/current/node_modules/.bin/vinext start --hostname 127.0.0.1 --port 45180
+Restart=on-failure
+RestartSec=3s
+TimeoutStartSec=30s
+TimeoutStopSec=20s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/twophotonlithography-runtime
+
+[Install]
+WantedBy=multi-user.target
