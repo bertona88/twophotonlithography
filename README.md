@@ -1,65 +1,76 @@
-# TwoPhotonLithography
+# Two-Photon Lithography Lab
 
-> **Preliminary Setup Universe wrapper.** The current demo is temporary; the full simulator is expected to be redesigned and rebuilt substantially from scratch.
+An interactive browser laboratory that connects a sliced Micro-Benchy exposure
+path to a deterministic reaction–diffusion polymerization simulation.
 
-- **Live prototype:** https://twophotonlithography.com/
-- **Prototype release verified:** 2026-07-26 (`20260726T002235Z-478235af2650`); check the URL for current availability
-- **Field:** Nonlinear microfabrication
-- **Status:** Greenfield planning wrapper with a preserved prototype snapshot
+[Open the live lab](https://tpl-reaction-lab.abertoncini.chatgpt.site)
 
-## Vision
+## What is implemented
 
-The intended TwoPhotonLithography product is a two-photon fabrication simulator joining optical focusing, nonlinear absorption, radical chemistry, material conversion, scan mechanics, development, and manufactured geometry.
+- Parameter-driven Micro-Benchy slicing with layer, hatch, contour, scan-speed,
+  power, and motion controls
+- A timestamped Three.js exposure view with layer inspection
+- Fixed-step fields for photoinitiator, oxygen, radical activity, conversion,
+  gelation, and developer transport
+- A movable reaction lens showing local chemistry around the write path
+- Development based on computed transport and gel fraction
+- Deterministic replay and an oxygen-diffusion A/B branch
 
-TwoPhotonLithography is part of the **Setup Universe**: independently deployed scientific and systems workbenches intended to become interoperable. Over time, setups should be able to orchestrate or interface with one another through explicit, versioned, unit-aware ports without transferring ownership or copying private implementation state.
+The target mesh is used only to create the exposure toolpath. Polymerized and
+developed material is calculated from that path and the selected model
+parameters; the rendered outcome is not a canned cured Benchy.
 
-**First accepted end-to-end slice:** Build one scan-line exposure that carries a defined optical dose through radical generation, material conversion, thresholding, and developed geometry with reproducible conservation/accounting checks.
+## Scientific boundary
 
-**Model boundary:** TwoPhotonLithography owns fabrication-process state; OpticalSetup/PicSetup provide light, ElectricalSetup provides motion and control, and MolecularSetup provides material response through explicit ports.
+This release is an educational reduced continuum model. It builds intuition for
+nonlinear exposure, oxygen inhibition, radical transport, conversion, gelation,
+and development, but it is not calibrated to predict a specific commercial
+photoresist. Model parameters and numerical resolution are exposed so future
+resin presets can be fitted and validated explicitly.
 
-**Claim gate:** No process recipe, dimensional-accuracy, resist-qualification, throughput, or fabrication-yield claim is allowed before objective, pulse, resin, kinetics, and development parameters are calibrated.
+## Run locally
 
-## Important starting point
+Prerequisites:
 
-Read [AGENTS.md](./AGENTS.md) before planning or implementing work.
+- Node.js `>=22.13.0`
+- Linux with `flock`, `curl`, and GNU `timeout`
 
-The present browser demo should not constrain the next architecture. Before substantial implementation, this repository expects `VISION.md`, `FABRICATION_MODEL_CONTRACT.md`, `INTERFACE_CONTRACT.md`, `CLAIMS_AND_VALIDATION.md`, and `ACCEPTANCE_TESTS.md`.
-
-## Prototype model boundary
-
-The following describes only the current reference prototype, not the intended simulator.
-
-**Exact current scope:** A deterministic 2D XZ reaction–diffusion model: Gaussian intensity, two-photon source I², radical diffusion/decay, and thresholded development.
-
-**Known limits:**
-
-- The fields are pedagogical and dimensionless; they are not calibrated to a specific photoresist or objective.
-- Vector diffraction, oxygen inhibition, heat, shrinkage, and 3D transport are not included.
-
-## Current prototype snapshot
-
-`prototype/` preserves the exact shared browser-prototype source associated with production release `20260726T002235Z-478235af2650`. Its recorded deployed-source SHA-256 is `478235af26508aa70aa2af5f0196c9868b92ded1bed88106a9aa1a1cd86f8ba5`.
-
-The snapshot contains all current Setup Universe demos because that release uses one shared, host-routed runtime. It is immutable, reference-only prior art: do not build the new architecture inside it. Moving, archiving, or removing it requires explicit user authorization after an accepted successor and preserved provenance.
-
-To run the snapshot locally:
-
-```sh
-npm run prototype:test
-npm run prototype:check
-npm run prototype:serve
+```bash
+npm run install:ci
+npm run dev
 ```
 
-Then open http://127.0.0.1:4173/?setup=two-photon.
+The local development server uses Vite and Vinext. Generated dependencies,
+build artifacts, Wrangler state, and the Vinext font cache are intentionally
+excluded from Git.
 
-These commands validate only the legacy prototype. This wrapper intentionally has no future-product test suite until the greenfield implementation begins.
+## Validate
 
-## Setup Universe
+```bash
+npm run lint
+npm test
+```
 
-[PicSetup](https://github.com/bertona88/picsetup) · [ElectricalSetup](https://github.com/bertona88/electricalsetup) · [BiologicalSetup](https://github.com/bertona88/biologicalsetup) · [GravitySetup](https://github.com/bertona88/gravitysetup) · [EgoSetup](https://github.com/bertona88/egosetup) · [QuantumSetup](https://github.com/bertona88/quantumsetup) · [NoeticSetup](https://github.com/bertona88/noeticsetup) · [ComputationSetup](https://github.com/bertona88/computationsetup) · [LogisticSetup](https://github.com/bertona88/logisticsetup) · [MolecularSetup](https://github.com/bertona88/molecularsetup)
+`npm test` performs the production build, validates the deployable Worker
+artifact, and checks the rendered HTML metadata.
 
-OpticalSetup remains in [LucaGenchi/optics-sketch](https://github.com/LucaGenchi/optics-sketch).
+Additional commands:
 
-## License
+```bash
+npm run build
+npm run start
+npm run validate:artifact
+```
 
-No open-source license has been selected yet.
+## Current architecture
+
+- `app/page.tsx` — laboratory UI, slicer state, timeline, and controls
+- `app/lab-viewport.tsx` — client-only Three.js viewport
+- `app/simulation.worker.ts` — deterministic reaction–diffusion and development
+  solver running off the main thread
+- `worker/index.ts` — deployable Cloudflare Worker entry
+- `tests/` — build-artifact and rendered-output checks
+
+The current solver is TypeScript and runs in a Web Worker. Arbitrary STL
+slicing, multiscale refinement, resin calibration, and a Rust/Wasm reference
+solver are planned extensions rather than claims of this release.

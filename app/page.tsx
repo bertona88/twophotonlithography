@@ -1,0 +1,1345 @@
+"use client";
+
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import dynamic from "next/dynamic";
+import type { FieldMode } from "./lab-viewport";
+
+const LabViewport = dynamic(() => import("./lab-viewport"), {
+  ssr: false,
+});
+
+type LabStage =
+  | "model"
+  | "slicing"
+  | "ready"
+  | "exposing"
+  | "paused"
+  | "developing"
+  | "complete"
+  | "compare";
+
+type PanelTab = "specimen" | "path" | "light" | "resin" | "development";
+type DirtyKind = "slice" | "physics" | null;
+
+type ModelParams = {
+  layerHeight: number;
+  hatchSpacing: number;
+  hatchAngle: number;
+  contourCount: number;
+  passes: number;
+  power: number;
+  speed: number;
+  repetitionRate: number;
+  pulseDuration: number;
+  wavelength: number;
+  na: number;
+  initiator: number;
+  oxygen: number;
+  piDepletion: number;
+  radicalYield: number;
+  darkLoss: number;
+  oxygenQuench: number;
+  termination: number;
+  propagation: number;
+  oxygenDiffusion: number;
+  radicalDiffusion: number;
+  piDiffusion: number;
+  gelPoint: number;
+  developerRate: number;
+  developerResistance: number;
+  developmentTime: number;
+};
+
+type ModelKey = keyof ModelParams;
+
+type Metrics = {
+  oxygenMean: number;
+  conversionMean: number;
+  radicalMax: number;
+  gelledFraction: number;
+  survivingFraction: number;
+  pulseEnergyPj: number;
+  peakPowerW: number;
+  checksum: string;
+  cellSizeNm: number;
+  timestepUs: number;
+};
+
+type SliceInfo = {
+  layerCount: number;
+  pathLength: number;
+  estimatedSeconds: number;
+};
+
+type RunResult = {
+  metrics: Metrics;
+  conversion: Uint8Array;
+  oxygen: Uint8Array;
+  remaining: Uint8Array;
+  diffusion: number;
+};
+
+type ParameterDefinition = {
+  key: ModelKey;
+  name: string;
+  symbol: string;
+  unit: string;
+  min: number;
+  max: number;
+  step: number;
+  provenance?: "input" | "published" | "exploratory";
+  log?: boolean;
+};
+
+const DEFAULT_PARAMS: ModelParams = {
+  layerHeight: 0.48,
+  hatchSpacing: 0.72,
+  hatchAngle: 37,
+  contourCount: 2,
+  passes: 1,
+  power: 16,
+  speed: 45,
+  repetitionRate: 80,
+  pulseDuration: 100,
+  wavelength: 780,
+  na: 1.4,
+  initiator: 1,
+  oxygen: 1,
+  piDepletion: 0.02,
+  radicalYield: 1,
+  darkLoss: 0.15,
+  oxygenQuench: 8,
+  termination: 2,
+  propagation: 0.7,
+  oxygenDiffusion: 0.0035,
+  radicalDiffusion: 0.00008,
+  piDiffusion: 0.00036,
+  gelPoint: 0.3,
+  developerRate: 1.5,
+  developerResistance: 9,
+  developmentTime: 45,
+};
+
+const SLICER_KEYS = new Set<ModelKey>([
+  "layerHeight",
+  "hatchSpacing",
+  "hatchAngle",
+  "contourCount",
+]);
+
+const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinition[]> =
+  {
+    path: [
+      {
+        key: "layerHeight",
+        name: "Layer height",
+        symbol: "Δz",
+        unit: "µm",
+        min: 0.25,
+        max: 1.2,
+        step: 0.01,
+        provenance: "input",
+      },
+      {
+        key: "hatchSpacing",
+        name: "Hatch spacing",
+        symbol: "h",
+        unit: "µm",
+        min: 0.25,
+        max: 1.8,
+        step: 0.01,
+        provenance: "input",
+      },
+      {
+        key: "hatchAngle",
+        name: "Hatch angle",
+        symbol: "θ",
+        unit: "°",
+        min: 0,
+        max: 180,
+        step: 1,
+        provenance: "input",
+      },
+      {
+        key: "contourCount",
+        name: "Contour passes",
+        symbol: "N꜀",
+        unit: "",
+        min: 1,
+        max: 4,
+        step: 1,
+        provenance: "input",
+      },
+      {
+        key: "passes",
+        name: "Exposure passes",
+        symbol: "Nₚ",
+        unit: "",
+        min: 1,
+        max: 3,
+        step: 1,
+        provenance: "input",
+      },
+    ],
+    light: [
+      {
+        key: "power",
+        name: "Specimen power",
+        symbol: "P",
+        unit: "mW",
+        min: 6,
+        max: 32,
+        step: 0.1,
+        provenance: "input",
+      },
+      {
+        key: "speed",
+        name: "Scan speed",
+        symbol: "v",
+        unit: "µm/s",
+        min: 8,
+        max: 140,
+        step: 1,
+        provenance: "input",
+      },
+      {
+        key: "na",
+        name: "Numerical aperture",
+        symbol: "NA",
+        unit: "",
+        min: 0.7,
+        max: 1.49,
+        step: 0.01,
+        provenance: "input",
+      },
+      {
+        key: "wavelength",
+        name: "Wavelength",
+        symbol: "λ",
+        unit: "nm",
+        min: 720,
+        max: 1064,
+        step: 1,
+        provenance: "input",
+      },
+      {
+        key: "pulseDuration",
+        name: "Pulse duration",
+        symbol: "τₚ",
+        unit: "fs",
+        min: 50,
+        max: 400,
+        step: 1,
+        provenance: "input",
+      },
+      {
+        key: "repetitionRate",
+        name: "Repetition rate",
+        symbol: "f",
+        unit: "MHz",
+        min: 10,
+        max: 100,
+        step: 1,
+        provenance: "input",
+      },
+    ],
+    resin: [
+      {
+        key: "initiator",
+        name: "Initial photoinitiator",
+        symbol: "p₀",
+        unit: "rel.",
+        min: 0.2,
+        max: 2,
+        step: 0.01,
+        provenance: "exploratory",
+      },
+      {
+        key: "oxygen",
+        name: "Boundary oxygen",
+        symbol: "o₀",
+        unit: "rel.",
+        min: 0,
+        max: 2,
+        step: 0.01,
+        provenance: "exploratory",
+      },
+      {
+        key: "piDepletion",
+        name: "PI depletion",
+        symbol: "β",
+        unit: "T₀⁻¹",
+        min: 0,
+        max: 0.12,
+        step: 0.001,
+        provenance: "published",
+      },
+      {
+        key: "radicalYield",
+        name: "Radical yield",
+        symbol: "η",
+        unit: "rel.",
+        min: 0.1,
+        max: 3,
+        step: 0.01,
+        provenance: "exploratory",
+      },
+      {
+        key: "darkLoss",
+        name: "Dark radical loss",
+        symbol: "δ",
+        unit: "T₀⁻¹",
+        min: 0,
+        max: 1,
+        step: 0.01,
+        provenance: "exploratory",
+      },
+      {
+        key: "oxygenQuench",
+        name: "Oxygen quenching",
+        symbol: "q",
+        unit: "rel.",
+        min: 0,
+        max: 16,
+        step: 0.1,
+        provenance: "published",
+      },
+      {
+        key: "termination",
+        name: "Bimolecular termination",
+        symbol: "κ",
+        unit: "rel.",
+        min: 0,
+        max: 8,
+        step: 0.05,
+        provenance: "exploratory",
+      },
+      {
+        key: "propagation",
+        name: "Propagation",
+        symbol: "γ",
+        unit: "T₀⁻¹",
+        min: 0.05,
+        max: 2,
+        step: 0.01,
+        provenance: "exploratory",
+      },
+      {
+        key: "oxygenDiffusion",
+        name: "Oxygen diffusion",
+        symbol: "Dₒ",
+        unit: "L₀²/T₀",
+        min: 0,
+        max: 0.012,
+        step: 0.0001,
+        provenance: "published",
+      },
+      {
+        key: "radicalDiffusion",
+        name: "Radical diffusion",
+        symbol: "Dᵣ",
+        unit: "L₀²/T₀",
+        min: 0,
+        max: 0.003,
+        step: 0.00001,
+        provenance: "exploratory",
+      },
+      {
+        key: "piDiffusion",
+        name: "PI diffusion",
+        symbol: "Dₚ",
+        unit: "L₀²/T₀",
+        min: 0,
+        max: 0.003,
+        step: 0.00001,
+        provenance: "published",
+      },
+      {
+        key: "gelPoint",
+        name: "Gel point",
+        symbol: "xᵍ",
+        unit: "conv.",
+        min: 0.1,
+        max: 0.7,
+        step: 0.01,
+        provenance: "exploratory",
+      },
+    ],
+    development: [
+      {
+        key: "developerRate",
+        name: "Base dissolution",
+        symbol: "k₀",
+        unit: "s⁻¹",
+        min: 0.1,
+        max: 4,
+        step: 0.05,
+        provenance: "exploratory",
+      },
+      {
+        key: "developerResistance",
+        name: "Gel resistance",
+        symbol: "aₖ",
+        unit: "",
+        min: 1,
+        max: 16,
+        step: 0.1,
+        provenance: "exploratory",
+      },
+      {
+        key: "developmentTime",
+        name: "Development time",
+        symbol: "tᵈ",
+        unit: "s",
+        min: 5,
+        max: 120,
+        step: 1,
+        provenance: "input",
+      },
+    ],
+  };
+
+const EMPTY_METRICS: Metrics = {
+  oxygenMean: 1,
+  conversionMean: 0,
+  radicalMax: 0,
+  gelledFraction: 0,
+  survivingFraction: 1,
+  pulseEnergyPj: 0.2,
+  peakPowerW: 2,
+  checksum: "00000000",
+  cellSizeNm: 135,
+  timestepUs: 16,
+};
+
+const FIELD_LABELS: Record<FieldMode, { label: string; color: string }> = {
+  conversion: { label: "Conversion", color: "#ff8a3d" },
+  oxygen: { label: "Oxygen", color: "#46d8ff" },
+  radicals: { label: "Radicals", color: "#ffca5a" },
+  development: { label: "Remaining mass", color: "#f1e4c8" },
+};
+
+const PANEL_LABELS: Record<PanelTab, { short: string; full: string; glyph: string }> =
+  {
+    specimen: { short: "Model", full: "Specimen", glyph: "◇" },
+    path: { short: "Path", full: "Slicing & path", glyph: "≋" },
+    light: { short: "Light", full: "Light & motion", glyph: "⌁" },
+    resin: { short: "Resin", full: "Reaction model", glyph: "∿" },
+    development: { short: "Develop", full: "Development", glyph: "∇" },
+  };
+
+function formatNumber(value: number, digits = 2) {
+  if (Math.abs(value) < 0.001 && value !== 0) return value.toExponential(2);
+  return value.toLocaleString("en-US", { maximumFractionDigits: digits });
+}
+
+function ParamRow({
+  definition,
+  value,
+  onChange,
+}: {
+  definition: ParameterDefinition;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const provenance = definition.provenance ?? "input";
+  return (
+    <div className="param-row">
+      <div className="param-row-heading">
+        <div>
+          <span className="param-symbol">{definition.symbol}</span>
+          <span className="param-name">{definition.name}</span>
+        </div>
+        <span className={`provenance provenance-${provenance}`}>{provenance}</span>
+      </div>
+      <div className="param-control">
+        <input
+          aria-label={definition.name}
+          type="range"
+          min={definition.min}
+          max={definition.max}
+          step={definition.step}
+          value={value}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+        <label className="numeric-entry">
+          <input
+            aria-label={`${definition.name} numeric value`}
+            type="number"
+            min={definition.min}
+            max={definition.max}
+            step={definition.step}
+            value={value}
+            onChange={(event) => onChange(Number(event.target.value))}
+          />
+          <span>{definition.unit}</span>
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function ReactionLens({
+  pixels,
+  width,
+  height,
+  fieldMode,
+  onFieldMode,
+  metrics,
+}: {
+  pixels: Uint8Array | null;
+  width: number;
+  height: number;
+  fieldMode: FieldMode;
+  onFieldMode: (mode: FieldMode) => void;
+  metrics: Metrics;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !pixels || !width || !height) return;
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.imageSmoothingEnabled = false;
+    const image = context.createImageData(width, height);
+
+    for (let index = 0; index < width * height; index += 1) {
+      const oxygenValue = pixels[index * 4] / 255;
+      const radicalValue = pixels[index * 4 + 1] / 255;
+      const conversionValue = pixels[index * 4 + 2] / 255;
+      const remainingValue = pixels[index * 4 + 3] / 255;
+      let red = 6;
+      let green = 8;
+      let blue = 16;
+      let intensity = 0;
+
+      if (fieldMode === "oxygen") {
+        intensity = oxygenValue;
+        red += 64 * intensity;
+        green += 204 * intensity;
+        blue += 239 * intensity;
+      } else if (fieldMode === "radicals") {
+        intensity = radicalValue;
+        red += 249 * intensity;
+        green += 187 * intensity;
+        blue += 74 * intensity;
+      } else if (fieldMode === "development") {
+        intensity = remainingValue * Math.min(1, conversionValue * 2.2);
+        red += 235 * intensity;
+        green += 222 * intensity;
+        blue += 194 * intensity;
+      } else {
+        intensity = conversionValue;
+        const gel = Math.max(0, (conversionValue - 0.3) / 0.7);
+        red += 245 * intensity;
+        green += 112 * intensity + 100 * gel;
+        blue += 34 * intensity + 155 * gel;
+      }
+
+      image.data[index * 4] = Math.min(255, red);
+      image.data[index * 4 + 1] = Math.min(255, green);
+      image.data[index * 4 + 2] = Math.min(255, blue);
+      image.data[index * 4 + 3] = 255;
+    }
+    context.putImageData(image, 0, 0);
+  }, [pixels, width, height, fieldMode]);
+
+  return (
+    <section className="reaction-lens glass-panel" aria-label="Reaction Lens">
+      <div className="lens-heading">
+        <div>
+          <span className="eyebrow">Reaction Lens</span>
+          <strong>15 × 9 µm · XZ</strong>
+        </div>
+        <span className="live-indicator">
+          <i />
+          {metrics.cellSizeNm} nm cells
+        </span>
+      </div>
+      <div className="lens-canvas-wrap">
+        <canvas ref={canvasRef} className="lens-canvas" />
+        <div className="lens-reticle" aria-hidden="true" />
+        <span className="axis axis-x">X</span>
+        <span className="axis axis-z">Z</span>
+      </div>
+      <div className="field-selector">
+        {(Object.keys(FIELD_LABELS) as FieldMode[]).map((mode) => (
+          <button
+            key={mode}
+            className={fieldMode === mode ? "active" : ""}
+            onClick={() => onFieldMode(mode)}
+            style={{ "--field-color": FIELD_LABELS[mode].color } as React.CSSProperties}
+            type="button"
+          >
+            <i />
+            {FIELD_LABELS[mode].label}
+          </button>
+        ))}
+      </div>
+      <div className="lens-readouts">
+        <span>
+          O₂ <strong>{(metrics.oxygenMean * 100).toFixed(1)}%</strong>
+        </span>
+        <span>
+          R max <strong>{metrics.radicalMax.toFixed(2)}</strong>
+        </span>
+        <span>
+          x̄ <strong>{(metrics.conversionMean * 100).toFixed(1)}%</strong>
+        </span>
+        <span>
+          gel <strong>{(metrics.gelledFraction * 100).toFixed(1)}%</strong>
+        </span>
+      </div>
+    </section>
+  );
+}
+
+function stageLabel(stage: LabStage, exposureProgress: number) {
+  if (stage === "paused" && exposureProgress >= 0.999) return "Exposure complete";
+  return (
+    {
+      model: "Specimen ready",
+      slicing: "Compiling path",
+      ready: "Path ready",
+      exposing: "Exposure running",
+      paused: "Exposure paused",
+      developing: "Developer advancing",
+      complete: "Developed structure",
+      compare: "Comparison complete",
+    } as Record<LabStage, string>
+  )[stage];
+}
+
+function processIndex(stage: LabStage, exposureProgress: number) {
+  if (stage === "model" || stage === "slicing") return stage === "model" ? 0 : 1;
+  if (stage === "ready") return 1;
+  if (stage === "exposing" || stage === "paused") {
+    return exposureProgress >= 0.999 ? 2 : 2;
+  }
+  return 3;
+}
+
+export default function Home() {
+  const workerRef = useRef<Worker | null>(null);
+  const variantRunningRef = useRef(false);
+  const variantDiffusionRef = useRef(DEFAULT_PARAMS.oxygenDiffusion);
+  const latestArraysRef = useRef<{
+    conversion: Uint8Array;
+    oxygen: Uint8Array;
+    remaining: Uint8Array;
+  } | null>(null);
+
+  const [params, setParams] = useState<ModelParams>(DEFAULT_PARAMS);
+  const [stage, setStage] = useState<LabStage>("model");
+  const [panelTab, setPanelTab] = useState<PanelTab>("resin");
+  const [panelOpen, setPanelOpen] = useState(true);
+  const [dirty, setDirty] = useState<DirtyKind>(null);
+  const [fieldMode, setFieldMode] = useState<FieldMode>("conversion");
+  const [pathPositions, setPathPositions] = useState<Float32Array | null>(null);
+  const [macroPositions, setMacroPositions] = useState<Float32Array | null>(null);
+  const [conversion, setConversion] = useState<Uint8Array | null>(null);
+  const [oxygen, setOxygen] = useState<Uint8Array | null>(null);
+  const [remaining, setRemaining] = useState<Uint8Array | null>(null);
+  const [lensPixels, setLensPixels] = useState<Uint8Array | null>(null);
+  const [lensWidth, setLensWidth] = useState(112);
+  const [lensHeight, setLensHeight] = useState(68);
+  const [metrics, setMetrics] = useState<Metrics>(EMPTY_METRICS);
+  const [sliceInfo, setSliceInfo] = useState<SliceInfo | null>(null);
+  const [exposureProgress, setExposureProgress] = useState(0);
+  const [developmentProgress, setDevelopmentProgress] = useState(0);
+  const [simulatedSeconds, setSimulatedSeconds] = useState(0);
+  const [focus, setFocus] = useState<[number, number, number]>([0, 0, 7]);
+  const [selectedLayer, setSelectedLayer] = useState(0);
+  const [baseline, setBaseline] = useState<RunResult | null>(null);
+  const [variant, setVariant] = useState<RunResult | null>(null);
+  const [comparisonView, setComparisonView] = useState<"A" | "B">("B");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  useEffect(() => {
+    const worker = new Worker(new URL("./simulation.worker.ts", import.meta.url), {
+      type: "module",
+    });
+    workerRef.current = worker;
+    worker.onmessage = (event) => {
+      const message = event.data;
+      if (message.type === "sliceResult") {
+        setPathPositions(new Float32Array(message.lines));
+        setMacroPositions(new Float32Array(message.nodes));
+        setSliceInfo({
+          layerCount: message.layerCount,
+          pathLength: message.pathLength,
+          estimatedSeconds: message.estimatedSeconds,
+        });
+        setSelectedLayer(Math.max(0, Math.floor(message.layerCount * 0.43)));
+        setStage("ready");
+        return;
+      }
+      if (message.type !== "snapshot") return;
+
+      const nextConversion = new Uint8Array(message.conversion);
+      const nextOxygen = new Uint8Array(message.oxygen);
+      const nextRemaining = new Uint8Array(message.remaining);
+      latestArraysRef.current = {
+        conversion: nextConversion,
+        oxygen: nextOxygen,
+        remaining: nextRemaining,
+      };
+      setConversion(nextConversion);
+      setOxygen(nextOxygen);
+      setRemaining(nextRemaining);
+      setLensPixels(new Uint8Array(message.lens));
+      setLensWidth(message.lensWidth);
+      setLensHeight(message.lensHeight);
+      setMetrics(message.metrics);
+      setExposureProgress(message.exposureProgress);
+      setDevelopmentProgress(message.developmentProgress);
+      setSimulatedSeconds(message.simulatedSeconds);
+      setFocus(message.focus);
+
+      if (message.stage === "complete" && variantRunningRef.current) {
+        variantRunningRef.current = false;
+        setVariant({
+          metrics: message.metrics,
+          conversion: nextConversion.slice(),
+          oxygen: nextOxygen.slice(),
+          remaining: nextRemaining.slice(),
+          diffusion: variantDiffusionRef.current,
+        });
+        setStage("compare");
+      } else {
+        setStage(message.stage);
+      }
+    };
+    return () => {
+      worker.terminate();
+      workerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      if (
+        event.target instanceof HTMLInputElement ||
+        event.target instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
+      if (event.code === "Space") {
+        event.preventDefault();
+        if (stage === "exposing") workerRef.current?.postMessage({ type: "pause" });
+        if (stage === "paused" && exposureProgress < 0.999) {
+          workerRef.current?.postMessage({ type: "resume" });
+        }
+      }
+      if (event.key === "[") {
+        setSelectedLayer((value) => Math.max(0, value - 1));
+      }
+      if (event.key === "]") {
+        setSelectedLayer((value) =>
+          Math.min((sliceInfo?.layerCount ?? 1) - 1, value + 1),
+        );
+      }
+      if (event.key.toLowerCase() === "l") {
+        setFieldMode((value) =>
+          value === "conversion" ? "oxygen" : "conversion",
+        );
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [stage, exposureProgress, sliceInfo]);
+
+  const updateParam = useCallback(
+    (key: ModelKey, value: number) => {
+      setParams((current) => ({ ...current, [key]: value }));
+      if (stage !== "model" && stage !== "slicing") {
+        setDirty((current) =>
+          current === "slice" || SLICER_KEYS.has(key) ? "slice" : "physics",
+        );
+      }
+    },
+    [stage],
+  );
+
+  const slice = useCallback(
+    (nextParams = params) => {
+      setDirty(null);
+      setBaseline(null);
+      setVariant(null);
+      setStage("slicing");
+      setExposureProgress(0);
+      setDevelopmentProgress(0);
+      workerRef.current?.postMessage({ type: "slice", params: nextParams });
+    },
+    [params],
+  );
+
+  const applyPhysics = useCallback(() => {
+    setDirty(null);
+    setBaseline(null);
+    setVariant(null);
+    workerRef.current?.postMessage({ type: "configure", params });
+    setStage("ready");
+  }, [params]);
+
+  const branchOxygen = useCallback(() => {
+    const arrays = latestArraysRef.current;
+    if (!arrays) return;
+    setBaseline({
+      metrics,
+      conversion: arrays.conversion.slice(),
+      oxygen: arrays.oxygen.slice(),
+      remaining: arrays.remaining.slice(),
+      diffusion: params.oxygenDiffusion,
+    });
+    setVariant(null);
+    setComparisonView("B");
+    const nextParams = {
+      ...params,
+      oxygenDiffusion: Math.min(0.012, params.oxygenDiffusion * 2),
+    };
+    setParams(nextParams);
+    variantDiffusionRef.current = nextParams.oxygenDiffusion;
+    variantRunningRef.current = true;
+    workerRef.current?.postMessage({ type: "configure", params: nextParams });
+    workerRef.current?.postMessage({ type: "start" });
+    setStage("exposing");
+    setNotice("Branch B is replaying the identical path with 2× oxygen diffusion.");
+  }, [metrics, params]);
+
+  const primaryAction = useCallback(() => {
+    if (dirty === "slice") {
+      slice();
+      return;
+    }
+    if (dirty === "physics") {
+      applyPhysics();
+      return;
+    }
+    if (stage === "model") {
+      slice();
+      return;
+    }
+    if (stage === "ready") {
+      workerRef.current?.postMessage({ type: "start" });
+      setStage("exposing");
+      return;
+    }
+    if (stage === "exposing") {
+      workerRef.current?.postMessage({ type: "pause" });
+      return;
+    }
+    if (stage === "paused" && exposureProgress < 0.999) {
+      workerRef.current?.postMessage({ type: "resume" });
+      return;
+    }
+    if (stage === "paused") {
+      workerRef.current?.postMessage({ type: "develop" });
+      setStage("developing");
+      return;
+    }
+    if (stage === "complete") {
+      branchOxygen();
+      return;
+    }
+    if (stage === "compare") {
+      setComparisonView((value) => (value === "A" ? "B" : "A"));
+    }
+  }, [
+    dirty,
+    stage,
+    exposureProgress,
+    slice,
+    applyPhysics,
+    branchOxygen,
+  ]);
+
+  const primaryLabel = useMemo(() => {
+    if (dirty === "slice") return "Apply & reslice";
+    if (dirty === "physics") return "Apply & reset fields";
+    if (stage === "model") return "Slice specimen";
+    if (stage === "slicing") return "Compiling path…";
+    if (stage === "ready") return "Begin exposure";
+    if (stage === "exposing") return "Pause exposure";
+    if (stage === "paused" && exposureProgress < 0.999) return "Resume exposure";
+    if (stage === "paused") return "Admit developer";
+    if (stage === "developing") return "Developing…";
+    if (stage === "complete") return "Fork oxygen diffusion";
+    return `Show run ${comparisonView === "A" ? "B" : "A"}`;
+  }, [dirty, stage, exposureProgress, comparisonView]);
+
+  const displayArrays = useMemo(() => {
+    if (stage === "compare" && comparisonView === "A" && baseline) {
+      return baseline;
+    }
+    if (stage === "compare" && comparisonView === "B" && variant) {
+      return variant;
+    }
+    return { conversion, oxygen, remaining };
+  }, [stage, comparisonView, baseline, variant, conversion, oxygen, remaining]);
+
+  const displayMetrics =
+    stage === "compare" && comparisonView === "A" && baseline
+      ? baseline.metrics
+      : stage === "compare" && comparisonView === "B" && variant
+        ? variant.metrics
+        : metrics;
+
+  const activeProcess = processIndex(stage, exposureProgress);
+  const timelineProgress =
+    stage === "developing" || stage === "complete" || stage === "compare"
+      ? exposureProgress * 0.82 + developmentProgress * 0.18
+      : exposureProgress * 0.82;
+
+  const applyPreset = (preset: "wake" | "cliff" | "fine") => {
+    let next = { ...params };
+    if (preset === "wake") {
+      next = {
+        ...next,
+        passes: 2,
+        speed: 38,
+        oxygen: 1.15,
+        oxygenDiffusion: 0.0022,
+      };
+    }
+    if (preset === "cliff") {
+      next = {
+        ...next,
+        power: 12.4,
+        speed: 58,
+        oxygenQuench: 10.5,
+        passes: 1,
+      };
+    }
+    if (preset === "fine") {
+      next = {
+        ...next,
+        layerHeight: 0.32,
+        hatchSpacing: 0.46,
+        hatchAngle: 53,
+      };
+    }
+    setParams(next);
+    setDirty(preset === "fine" ? "slice" : "physics");
+  };
+
+  const handleDrop = (event: React.DragEvent) => {
+    event.preventDefault();
+    setDragging(false);
+    const file = event.dataTransfer.files[0];
+    if (!file) return;
+    setNotice(
+      `${file.name} is staged for mesh voxelization. This causal run remains locked to the bundled Micro‑Benchy SDF.`,
+    );
+  };
+
+  return (
+    <main
+      className="lab-shell"
+      onDragEnter={(event) => {
+        event.preventDefault();
+        setDragging(true);
+      }}
+      onDragOver={(event) => event.preventDefault()}
+      onDragLeave={(event) => {
+        if (event.currentTarget === event.target) setDragging(false);
+      }}
+      onDrop={handleDrop}
+    >
+      <LabViewport
+        pathPositions={pathPositions}
+        macroPositions={macroPositions}
+        conversion={displayArrays.conversion}
+        oxygen={displayArrays.oxygen}
+        remaining={displayArrays.remaining}
+        focus={focus}
+        progress={Math.max(
+          stage === "ready" ? 1 : 0,
+          stage === "model" || stage === "slicing" ? 0 : exposureProgress,
+        )}
+        selectedLayer={selectedLayer}
+        layerHeight={params.layerHeight}
+        fieldMode={fieldMode}
+        stage={stage}
+      />
+
+      <header className="lab-header">
+        <div className="brand-lockup">
+          <div className="brand-mark" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </div>
+          <div>
+            <strong>two·photon</strong>
+            <span>causal lithography lab</span>
+          </div>
+        </div>
+
+        <nav className="process-rail" aria-label="Experiment process">
+          {["MODEL", "SLICE", "EXPOSE", "DEVELOP"].map((label, index) => (
+            <div
+              className={`${index === activeProcess ? "active" : ""} ${
+                index < activeProcess ? "complete" : ""
+              }`}
+              key={label}
+            >
+              <span>{String(index + 1).padStart(2, "0")}</span>
+              <strong>{label}</strong>
+            </div>
+          ))}
+        </nav>
+
+        <div className="solver-status">
+          <span className={stage === "exposing" || stage === "developing" ? "running" : ""}>
+            <i />
+            {stageLabel(stage, exposureProgress)}
+          </span>
+          <strong>4F-RD · seed 07A1</strong>
+        </div>
+      </header>
+
+      <section className="specimen-tag glass-panel" aria-label="Specimen details">
+        <div className="eyebrow-row">
+          <span className="eyebrow">Target / CC0 benchmark</span>
+          <span className="target-badge">TARGET</span>
+        </div>
+        <h1>Micro‑Benchy</h1>
+        <p>21.6 × 8.7 × 12.7 µm · analytic SDF</p>
+        <div className="specimen-meta">
+          <span>
+            <i className="violet" /> focus PSF
+          </span>
+          <span>
+            <i className="slate" /> intended path
+          </span>
+          <span>
+            <i className="amber" /> calculated matter
+          </span>
+        </div>
+        {sliceInfo && (
+          <div className="slice-summary">
+            <span>
+              <strong>{sliceInfo.layerCount}</strong> layers
+            </span>
+            <span>
+              <strong>{formatNumber(sliceInfo.pathLength, 0)}</strong> µm path
+            </span>
+            <span>
+              <strong>{formatNumber(sliceInfo.estimatedSeconds, 1)}</strong> s physical
+            </span>
+          </div>
+        )}
+      </section>
+
+      <ReactionLens
+        pixels={lensPixels}
+        width={lensWidth}
+        height={lensHeight}
+        fieldMode={fieldMode}
+        onFieldMode={setFieldMode}
+        metrics={displayMetrics}
+      />
+
+      <aside className={`parameter-dock ${panelOpen ? "open" : ""}`}>
+        <div className="parameter-spine" aria-label="Parameter groups">
+          {(Object.keys(PANEL_LABELS) as PanelTab[]).map((tab) => (
+            <button
+              key={tab}
+              className={panelTab === tab && panelOpen ? "active" : ""}
+              onClick={() => {
+                if (panelTab === tab) setPanelOpen((value) => !value);
+                else {
+                  setPanelTab(tab);
+                  setPanelOpen(true);
+                }
+              }}
+              type="button"
+              aria-label={PANEL_LABELS[tab].full}
+            >
+              <span>{PANEL_LABELS[tab].glyph}</span>
+              <small>{PANEL_LABELS[tab].short}</small>
+            </button>
+          ))}
+        </div>
+
+        <section className="parameter-sheet glass-panel">
+          <div className="sheet-heading">
+            <div>
+              <span className="eyebrow">Parameter sheet</span>
+              <h2>{PANEL_LABELS[panelTab].full}</h2>
+            </div>
+            <button
+              className="sheet-close"
+              onClick={() => setPanelOpen(false)}
+              type="button"
+              aria-label="Close parameter sheet"
+            >
+              ×
+            </button>
+          </div>
+
+          {panelTab === "specimen" ? (
+            <div className="specimen-sheet">
+              <div className="mesh-card">
+                <div className="mesh-miniature" aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
+                </div>
+                <div>
+                  <strong>Micro‑Benchy.sdf</strong>
+                  <span>Watertight · manifold · 1:1000</span>
+                </div>
+                <span className="ok-chip">ready</span>
+              </div>
+              <div className="transform-grid">
+                <label>
+                  Scale
+                  <strong>1.000</strong>
+                </label>
+                <label>
+                  Rotation Z
+                  <strong>0.0°</strong>
+                </label>
+                <label>
+                  Anchors
+                  <strong>auto / 3</strong>
+                </label>
+                <label>
+                  Clearance
+                  <strong>0.18 µm</strong>
+                </label>
+              </div>
+              <p className="sheet-note">
+                The ghost is geometry only. It is never used as a cured mask.
+              </p>
+            </div>
+          ) : (
+            <div className="parameter-list">
+              {PARAMETER_GROUPS[panelTab].map((definition) => (
+                <ParamRow
+                  key={definition.key}
+                  definition={definition}
+                  value={params[definition.key]}
+                  onChange={(value) => updateParam(definition.key, value)}
+                />
+              ))}
+            </div>
+          )}
+
+          {panelTab === "resin" && (
+            <div className="equation-card">
+              <div>
+                <span className="eyebrow">Executed model</span>
+                <span className="model-chip">reduced · deterministic</span>
+              </div>
+              <code>∂ₜr = Dᵣ∇²r + ηsp − (δ + qo)r − κr²</code>
+              <code>∂ₜo = Dₒ∇²o − χqor</code>
+              <code>∂ₜx = γr(1 − x)</code>
+              <p>
+                Educational nondimensional preset. Comparative, not a calibrated
+                commercial resin prediction.
+              </p>
+            </div>
+          )}
+        </section>
+      </aside>
+
+      <div className="preset-rail" aria-label="Physics experiment presets">
+        <span className="eyebrow">Experiments</span>
+        <button onClick={() => applyPreset("wake")} type="button">
+          Twice-written wake
+        </button>
+        <button onClick={() => applyPreset("cliff")} type="button">
+          Power cliff
+        </button>
+        <button onClick={() => applyPreset("fine")} type="button">
+          Fine roof
+        </button>
+      </div>
+
+      {baseline && (
+        <section className="comparison-card glass-panel">
+          <div className="comparison-heading">
+            <div>
+              <span className="eyebrow">Counterfactual branch</span>
+              <strong>Dₒ × 2 · same path / same seed</strong>
+            </div>
+            <div className="ab-toggle">
+              <button
+                className={comparisonView === "A" ? "active" : ""}
+                onClick={() => setComparisonView("A")}
+                type="button"
+              >
+                A
+              </button>
+              <button
+                className={comparisonView === "B" ? "active" : ""}
+                onClick={() => setComparisonView("B")}
+                type="button"
+                disabled={!variant}
+              >
+                B
+              </button>
+            </div>
+          </div>
+          <div className="comparison-values">
+            <span>
+              diffusion
+              <strong>
+                {baseline.diffusion.toFixed(4)} →{" "}
+                {(variant?.diffusion ?? params.oxygenDiffusion).toFixed(4)}
+              </strong>
+            </span>
+            <span>
+              gelled
+              <strong>
+                {(baseline.metrics.gelledFraction * 100).toFixed(1)}% →{" "}
+                {variant
+                  ? `${(variant.metrics.gelledFraction * 100).toFixed(1)}%`
+                  : "running"}
+              </strong>
+            </span>
+            <span>
+              survives
+              <strong>
+                {(baseline.metrics.survivingFraction * 100).toFixed(1)}% →{" "}
+                {variant
+                  ? `${(variant.metrics.survivingFraction * 100).toFixed(1)}%`
+                  : "—"}
+              </strong>
+            </span>
+          </div>
+        </section>
+      )}
+
+      <section className="causal-tape glass-panel" aria-label="Causal experiment tape">
+        <div className="tape-topline">
+          <div className="tape-identity">
+            <span className="eyebrow">Causal tape</span>
+            <strong>
+              {simulatedSeconds.toFixed(2)} s
+              <small>physical exposure time</small>
+            </strong>
+          </div>
+          {sliceInfo && (
+            <label className="layer-scrubber">
+              <span>
+                Layer{" "}
+                <strong>
+                  {selectedLayer + 1}/{sliceInfo.layerCount}
+                </strong>
+              </span>
+              <input
+                aria-label="Inspected layer"
+                type="range"
+                min={0}
+                max={Math.max(0, sliceInfo.layerCount - 1)}
+                value={selectedLayer}
+                onChange={(event) => setSelectedLayer(Number(event.target.value))}
+              />
+            </label>
+          )}
+          <div className="integrity-readout">
+            <span>
+              Δt <strong>{displayMetrics.timestepUs} µs</strong>
+            </span>
+            <span>
+              replay <strong>{displayMetrics.checksum}</strong>
+            </span>
+          </div>
+        </div>
+        <div className="timeline">
+          <div className="timeline-track">
+            <div
+              className="timeline-progress"
+              style={{ width: `${timelineProgress * 100}%` }}
+            />
+            <div
+              className="timeline-playhead"
+              style={{ left: `${timelineProgress * 100}%` }}
+            >
+              <i />
+            </div>
+            {Array.from({ length: 22 }).map((_, index) => (
+              <i
+                className="layer-tick"
+                key={index}
+                style={{ left: `${(index / 21) * 82}%` }}
+              />
+            ))}
+            <span className="phase-label expose-phase">EXPOSURE</span>
+            <span className="phase-label develop-phase">DEVELOP</span>
+          </div>
+        </div>
+      </section>
+
+      <button
+        className={`primary-actuator ${
+          stage === "exposing" || stage === "developing" ? "active" : ""
+        }`}
+        onClick={primaryAction}
+        type="button"
+        disabled={stage === "slicing" || stage === "developing"}
+      >
+        <span className="actuator-icon" aria-hidden="true">
+          {stage === "exposing" ? "Ⅱ" : stage === "developing" ? "◌" : "↗"}
+        </span>
+        <span>
+          <small>{dirty ? "Parameters changed" : stageLabel(stage, exposureProgress)}</small>
+          <strong>{primaryLabel}</strong>
+        </span>
+        <i className="actuator-progress">
+          <b
+            style={{
+              width: `${
+                stage === "developing"
+                  ? developmentProgress * 100
+                  : exposureProgress * 100
+              }%`,
+            }}
+          />
+        </i>
+      </button>
+
+      {dirty && (
+        <div className="stale-notice">
+          <i />
+          {dirty === "slice"
+            ? "Toolpath is out of date"
+            : "Chemistry fields need replay"}
+        </div>
+      )}
+
+      {notice && (
+        <div className="toast" role="status">
+          <span>{notice}</span>
+          <button onClick={() => setNotice(null)} type="button" aria-label="Dismiss">
+            ×
+          </button>
+        </div>
+      )}
+
+      {dragging && (
+        <div className="drop-overlay">
+          <div>
+            <span className="drop-icon">↓</span>
+            <strong>Drop mesh into the chamber</strong>
+            <p>STL preview is accepted; the causal run remains on Micro‑Benchy.</p>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
