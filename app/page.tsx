@@ -68,7 +68,20 @@ type Metrics = {
   peakPowerW: number;
   checksum: string;
   cellSizeNm: number;
-  timestepUs: number;
+  timestepModel: number;
+};
+
+type SolverState = "initializing" | "ready" | "error";
+
+type SolverDiagnostics = {
+  solver: "Rust/Wasm";
+  gridWidth: number;
+  gridHeight: number;
+  timestepModel: number;
+  updatesPerSecond: number;
+  simulatedModelTime: number;
+  wasmMemoryBytes: number;
+  checksum: string;
 };
 
 type SliceInfo = {
@@ -81,7 +94,12 @@ type RunResult = {
   metrics: Metrics;
   conversion: Uint8Array;
   oxygen: Uint8Array;
+  radicals: Uint8Array;
   remaining: Uint8Array;
+  lensPixels: Uint8Array;
+  lensWidth: number;
+  lensHeight: number;
+  diagnostics: SolverDiagnostics;
   diffusion: number;
 };
 
@@ -376,7 +394,7 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         key: "developerRate",
         name: "Base dissolution",
         symbol: "k₀",
-        unit: "s⁻¹",
+        unit: "T₀⁻¹",
         min: 0.1,
         max: 4,
         step: 0.05,
@@ -396,7 +414,7 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         key: "developmentTime",
         name: "Development time",
         symbol: "tᵈ",
-        unit: "s",
+        unit: "T₀",
         min: 5,
         max: 120,
         step: 1,
@@ -415,7 +433,18 @@ const EMPTY_METRICS: Metrics = {
   peakPowerW: 2,
   checksum: "00000000",
   cellSizeNm: 135,
-  timestepUs: 16,
+  timestepModel: 0.016,
+};
+
+const EMPTY_SOLVER_DIAGNOSTICS: SolverDiagnostics = {
+  solver: "Rust/Wasm",
+  gridWidth: 112,
+  gridHeight: 68,
+  timestepModel: 0.016,
+  updatesPerSecond: 0,
+  simulatedModelTime: 0,
+  wasmMemoryBytes: 0,
+  checksum: "00000000",
 };
 
 const FIELD_LABELS: Record<FieldMode, { label: string; color: string }> = {
@@ -439,14 +468,21 @@ function formatNumber(value: number, digits = 2) {
   return value.toLocaleString("en-US", { maximumFractionDigits: digits });
 }
 
+function formatMemory(bytes: number) {
+  if (!bytes) return "memory pending";
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB linear memory`;
+}
+
 function ParamRow({
   definition,
   value,
   onChange,
+  disabled,
 }: {
   definition: ParameterDefinition;
   value: number;
   onChange: (value: number) => void;
+  disabled: boolean;
 }) {
   const provenance = definition.provenance ?? "input";
   return (
@@ -466,6 +502,7 @@ function ParamRow({
           max={definition.max}
           step={definition.step}
           value={value}
+          disabled={disabled}
           onChange={(event) => onChange(Number(event.target.value))}
         />
         <label className="numeric-entry">
@@ -476,6 +513,7 @@ function ParamRow({
             max={definition.max}
             step={definition.step}
             value={value}
+            disabled={disabled}
             onChange={(event) => onChange(Number(event.target.value))}
           />
           <span>{definition.unit}</span>
@@ -492,6 +530,8 @@ function ReactionLens({
   fieldMode,
   onFieldMode,
   metrics,
+  solverState,
+  diagnostics,
 }: {
   pixels: Uint8Array | null;
   width: number;
@@ -499,6 +539,8 @@ function ReactionLens({
   fieldMode: FieldMode;
   onFieldMode: (mode: FieldMode) => void;
   metrics: Metrics;
+  solverState: SolverState;
+  diagnostics: SolverDiagnostics;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -562,7 +604,7 @@ function ReactionLens({
         </div>
         <span className="live-indicator">
           <i />
-          {metrics.cellSizeNm} nm cells
+          {solverState === "ready" ? `${metrics.cellSizeNm} nm cells` : solverState}
         </span>
       </div>
       <div className="lens-canvas-wrap">
@@ -597,6 +639,20 @@ function ReactionLens({
         </span>
         <span>
           gel <strong>{(metrics.gelledFraction * 100).toFixed(1)}%</strong>
+        </span>
+      </div>
+      <div className="lens-diagnostics" aria-label="Solver diagnostics">
+        <span>
+          <strong>{diagnostics.solver}</strong>
+          {diagnostics.gridWidth}×{diagnostics.gridHeight}
+        </span>
+        <span>
+          <strong>Δt {diagnostics.timestepModel.toFixed(3)} T₀</strong>
+          {diagnostics.updatesPerSecond.toFixed(0)} updates/s
+        </span>
+        <span>
+          <strong>t {diagnostics.simulatedModelTime.toFixed(2)} T₀</strong>
+          {formatMemory(diagnostics.wasmMemoryBytes)}
         </span>
       </div>
     </section>
@@ -635,6 +691,7 @@ export default function Home() {
   const latestArraysRef = useRef<{
     conversion: Uint8Array;
     oxygen: Uint8Array;
+    radicals: Uint8Array;
     remaining: Uint8Array;
   } | null>(null);
 
@@ -648,6 +705,7 @@ export default function Home() {
   const [macroPositions, setMacroPositions] = useState<Float32Array | null>(null);
   const [conversion, setConversion] = useState<Uint8Array | null>(null);
   const [oxygen, setOxygen] = useState<Uint8Array | null>(null);
+  const [radicals, setRadicals] = useState<Uint8Array | null>(null);
   const [remaining, setRemaining] = useState<Uint8Array | null>(null);
   const [lensPixels, setLensPixels] = useState<Uint8Array | null>(null);
   const [lensWidth, setLensWidth] = useState(112);
@@ -664,6 +722,11 @@ export default function Home() {
   const [comparisonView, setComparisonView] = useState<"A" | "B">("B");
   const [notice, setNotice] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [solverState, setSolverState] =
+    useState<SolverState>("initializing");
+  const [solverError, setSolverError] = useState<string | null>(null);
+  const [solverDiagnostics, setSolverDiagnostics] =
+    useState<SolverDiagnostics>(EMPTY_SOLVER_DIAGNOSTICS);
 
   useEffect(() => {
     const worker = new Worker(new URL("./simulation.worker.ts", import.meta.url), {
@@ -672,6 +735,31 @@ export default function Home() {
     workerRef.current = worker;
     worker.onmessage = (event) => {
       const message = event.data;
+      if (message.type === "solverStatus") {
+        setSolverState(message.status);
+        if (message.status === "ready") {
+          setSolverError(null);
+          if (message.diagnostics) {
+            setSolverDiagnostics(message.diagnostics);
+          }
+        }
+        if (message.status === "error") {
+          setSolverError(message.message || "The Rust/Wasm solver could not initialize.");
+        }
+        return;
+      }
+      if (message.type === "commandError") {
+        setNotice(message.message || "The simulation command was rejected.");
+        if (message.stage) {
+          setStage(message.stage);
+        }
+        if (message.command === "slice") {
+          setDirty("slice");
+        } else if (message.command === "configure") {
+          setDirty("physics");
+        }
+        return;
+      }
       if (message.type === "sliceResult") {
         setPathPositions(new Float32Array(message.lines));
         setMacroPositions(new Float32Array(message.nodes));
@@ -688,16 +776,24 @@ export default function Home() {
 
       const nextConversion = new Uint8Array(message.conversion);
       const nextOxygen = new Uint8Array(message.oxygen);
+      const nextRadicals = message.radicals
+        ? new Uint8Array(message.radicals)
+        : new Uint8Array(nextConversion.length);
       const nextRemaining = new Uint8Array(message.remaining);
+      const nextLensPixels = new Uint8Array(message.lens);
+      const nextDiagnostics =
+        message.diagnostics ?? EMPTY_SOLVER_DIAGNOSTICS;
       latestArraysRef.current = {
         conversion: nextConversion,
         oxygen: nextOxygen,
+        radicals: nextRadicals,
         remaining: nextRemaining,
       };
       setConversion(nextConversion);
       setOxygen(nextOxygen);
+      setRadicals(nextRadicals);
       setRemaining(nextRemaining);
-      setLensPixels(new Uint8Array(message.lens));
+      setLensPixels(nextLensPixels);
       setLensWidth(message.lensWidth);
       setLensHeight(message.lensHeight);
       setMetrics(message.metrics);
@@ -705,6 +801,7 @@ export default function Home() {
       setDevelopmentProgress(message.developmentProgress);
       setSimulatedSeconds(message.simulatedSeconds);
       setFocus(message.focus);
+      setSolverDiagnostics(nextDiagnostics);
 
       if (message.stage === "complete" && variantRunningRef.current) {
         variantRunningRef.current = false;
@@ -712,13 +809,29 @@ export default function Home() {
           metrics: message.metrics,
           conversion: nextConversion.slice(),
           oxygen: nextOxygen.slice(),
+          radicals: nextRadicals.slice(),
           remaining: nextRemaining.slice(),
+          lensPixels: nextLensPixels.slice(),
+          lensWidth: message.lensWidth,
+          lensHeight: message.lensHeight,
+          diagnostics: nextDiagnostics,
           diffusion: variantDiffusionRef.current,
         });
         setStage("compare");
       } else {
         setStage(message.stage);
       }
+    };
+    worker.onerror = (event) => {
+      event.preventDefault();
+      setSolverState("error");
+      setSolverError(
+        event.message || "The simulation worker failed before Rust/Wasm initialized.",
+      );
+    };
+    worker.onmessageerror = () => {
+      setSolverState("error");
+      setSolverError("The simulation worker returned an unreadable message.");
     };
     return () => {
       worker.terminate();
@@ -734,6 +847,7 @@ export default function Home() {
       ) {
         return;
       }
+      if (solverState !== "ready") return;
       if (event.code === "Space") {
         event.preventDefault();
         if (stage === "exposing") workerRef.current?.postMessage({ type: "pause" });
@@ -757,7 +871,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [stage, exposureProgress, sliceInfo]);
+  }, [stage, exposureProgress, sliceInfo, solverState]);
 
   const updateParam = useCallback(
     (key: ModelKey, value: number) => {
@@ -794,12 +908,17 @@ export default function Home() {
 
   const branchOxygen = useCallback(() => {
     const arrays = latestArraysRef.current;
-    if (!arrays) return;
+    if (!arrays || !lensPixels) return;
     setBaseline({
       metrics,
       conversion: arrays.conversion.slice(),
       oxygen: arrays.oxygen.slice(),
+      radicals: arrays.radicals.slice(),
       remaining: arrays.remaining.slice(),
+      lensPixels: lensPixels.slice(),
+      lensWidth,
+      lensHeight,
+      diagnostics: solverDiagnostics,
       diffusion: params.oxygenDiffusion,
     });
     setVariant(null);
@@ -815,9 +934,17 @@ export default function Home() {
     workerRef.current?.postMessage({ type: "start" });
     setStage("exposing");
     setNotice("Branch B is replaying the identical path with 2× oxygen diffusion.");
-  }, [metrics, params]);
+  }, [
+    lensHeight,
+    lensPixels,
+    lensWidth,
+    metrics,
+    params,
+    solverDiagnostics,
+  ]);
 
   const primaryAction = useCallback(() => {
+    if (solverState !== "ready") return;
     if (dirty === "slice") {
       slice();
       return;
@@ -862,9 +989,12 @@ export default function Home() {
     slice,
     applyPhysics,
     branchOxygen,
+    solverState,
   ]);
 
   const primaryLabel = useMemo(() => {
+    if (solverState === "initializing") return "Loading Rust solver…";
+    if (solverState === "error") return "Solver unavailable";
     if (dirty === "slice") return "Apply & reslice";
     if (dirty === "physics") return "Apply & reset fields";
     if (stage === "model") return "Slice specimen";
@@ -876,24 +1006,27 @@ export default function Home() {
     if (stage === "developing") return "Developing…";
     if (stage === "complete") return "Fork oxygen diffusion";
     return `Show run ${comparisonView === "A" ? "B" : "A"}`;
-  }, [dirty, stage, exposureProgress, comparisonView]);
+  }, [dirty, stage, exposureProgress, comparisonView, solverState]);
 
-  const displayArrays = useMemo(() => {
+  const selectedRun = useMemo(() => {
     if (stage === "compare" && comparisonView === "A" && baseline) {
       return baseline;
     }
     if (stage === "compare" && comparisonView === "B" && variant) {
       return variant;
     }
-    return { conversion, oxygen, remaining };
-  }, [stage, comparisonView, baseline, variant, conversion, oxygen, remaining]);
+    return null;
+  }, [baseline, comparisonView, stage, variant]);
 
-  const displayMetrics =
-    stage === "compare" && comparisonView === "A" && baseline
-      ? baseline.metrics
-      : stage === "compare" && comparisonView === "B" && variant
-        ? variant.metrics
-        : metrics;
+  const displayArrays =
+    selectedRun ?? { conversion, oxygen, radicals, remaining };
+
+  const displayMetrics = selectedRun?.metrics ?? metrics;
+  const displayLensPixels = selectedRun?.lensPixels ?? lensPixels;
+  const displayLensWidth = selectedRun?.lensWidth ?? lensWidth;
+  const displayLensHeight = selectedRun?.lensHeight ?? lensHeight;
+  const displaySolverDiagnostics =
+    selectedRun?.diagnostics ?? solverDiagnostics;
 
   const activeProcess = processIndex(stage, exposureProgress);
   const timelineProgress =
@@ -946,6 +1079,7 @@ export default function Home() {
   return (
     <main
       className="lab-shell"
+      data-solver-state={solverState}
       onDragEnter={(event) => {
         event.preventDefault();
         setDragging(true);
@@ -961,6 +1095,7 @@ export default function Home() {
         macroPositions={macroPositions}
         conversion={displayArrays.conversion}
         oxygen={displayArrays.oxygen}
+        radicals={displayArrays.radicals}
         remaining={displayArrays.remaining}
         focus={focus}
         progress={Math.max(
@@ -1001,11 +1136,22 @@ export default function Home() {
         </nav>
 
         <div className="solver-status">
-          <span className={stage === "exposing" || stage === "developing" ? "running" : ""}>
+          <span
+            className={
+              solverState === "ready" &&
+              (stage === "exposing" || stage === "developing")
+                ? "running"
+                : ""
+            }
+          >
             <i />
-            {stageLabel(stage, exposureProgress)}
+            {solverState === "error"
+              ? "Solver unavailable"
+              : solverState === "initializing"
+                ? "Initializing solver"
+                : stageLabel(stage, exposureProgress)}
           </span>
-          <strong>4F-RD · seed 07A1</strong>
+          <strong>Rust/Wasm · 4F-RD · seed 07A1</strong>
         </div>
       </header>
 
@@ -1043,12 +1189,14 @@ export default function Home() {
       </section>
 
       <ReactionLens
-        pixels={lensPixels}
-        width={lensWidth}
-        height={lensHeight}
+        pixels={displayLensPixels}
+        width={displayLensWidth}
+        height={displayLensHeight}
         fieldMode={fieldMode}
         onFieldMode={setFieldMode}
         metrics={displayMetrics}
+        solverState={solverState}
+        diagnostics={displaySolverDiagnostics}
       />
 
       <aside className={`parameter-dock ${panelOpen ? "open" : ""}`}>
@@ -1133,6 +1281,7 @@ export default function Home() {
                   definition={definition}
                   value={params[definition.key]}
                   onChange={(value) => updateParam(definition.key, value)}
+                  disabled={stage === "slicing"}
                 />
               ))}
             </div>
@@ -1158,13 +1307,25 @@ export default function Home() {
 
       <div className="preset-rail" aria-label="Physics experiment presets">
         <span className="eyebrow">Experiments</span>
-        <button onClick={() => applyPreset("wake")} type="button">
+        <button
+          onClick={() => applyPreset("wake")}
+          type="button"
+          disabled={stage === "slicing"}
+        >
           Twice-written wake
         </button>
-        <button onClick={() => applyPreset("cliff")} type="button">
+        <button
+          onClick={() => applyPreset("cliff")}
+          type="button"
+          disabled={stage === "slicing"}
+        >
           Power cliff
         </button>
-        <button onClick={() => applyPreset("fine")} type="button">
+        <button
+          onClick={() => applyPreset("fine")}
+          type="button"
+          disabled={stage === "slicing"}
+        >
           Fine roof
         </button>
       </div>
@@ -1253,7 +1414,7 @@ export default function Home() {
           )}
           <div className="integrity-readout">
             <span>
-              Δt <strong>{displayMetrics.timestepUs} µs</strong>
+              Δt <strong>{displayMetrics.timestepModel.toFixed(3)} T₀</strong>
             </span>
             <span>
               replay <strong>{displayMetrics.checksum}</strong>
@@ -1291,7 +1452,11 @@ export default function Home() {
         }`}
         onClick={primaryAction}
         type="button"
-        disabled={stage === "slicing" || stage === "developing"}
+        disabled={
+          solverState !== "ready" ||
+          stage === "slicing" ||
+          stage === "developing"
+        }
       >
         <span className="actuator-icon" aria-hidden="true">
           {stage === "exposing" ? "Ⅱ" : stage === "developing" ? "◌" : "↗"}
@@ -1319,6 +1484,13 @@ export default function Home() {
           {dirty === "slice"
             ? "Toolpath is out of date"
             : "Chemistry fields need replay"}
+        </div>
+      )}
+
+      {solverError && (
+        <div className="solver-alert" role="alert">
+          <strong>Rust/Wasm initialization failed</strong>
+          <span>{solverError}</span>
         </div>
       )}
 

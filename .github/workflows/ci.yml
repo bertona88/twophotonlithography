@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - name: Install wasm-pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/wasm-pack.tar.gz"
+          cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
+          install_root="${RUNNER_TEMP}/wasm-pack"
+          curl --fail --location --silent --show-error \
+            https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz \
+            --output "${archive}"
+          mkdir -p "${install_root}" "${cargo_home}/bin"
+          tar -xzf "${archive}" --strip-components=1 -C "${install_root}"
+          install -m 0755 "${install_root}/wasm-pack" "${cargo_home}/bin/wasm-pack"
+          wasm-pack --version
+      - run: npm run install:ci
+      - run: npm test

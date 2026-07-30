@@ -44,6 +44,11 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    build: {
+      // Keep the Rust module as a real .wasm asset so the browser worker can
+      // instantiate it with the correct MIME type and report load failures.
+      assetsInlineLimit: 0,
+    },
     server: {
       host: "0.0.0.0",
       allowedHosts: ["terminal.local"],
@@ -60,5 +65,8 @@ export default defineConfig(async () => {
         config: localBindingConfig,
       }),
     ],
+    worker: {
+      format: "es" as const,
+    },
   };
 });
