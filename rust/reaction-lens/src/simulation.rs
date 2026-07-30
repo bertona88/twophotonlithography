@@ -1,6 +1,8 @@
 use serde::Serialize;
 
-use crate::parameters::{Parameters, SimulationConfig, ValidationError};
+use crate::parameters::{
+    Parameters, SimulationConfig, ValidationError, MAX_EXPOSURE_STEPS_TOTAL,
+};
 
 pub const GRID_WIDTH: usize = 112;
 pub const GRID_HEIGHT: usize = 68;
@@ -181,6 +183,7 @@ pub struct Diagnostics {
     pub development_step: u32,
     pub development_steps_total: u32,
     pub exposure_simulated_model_time: f64,
+    pub dark_simulated_model_time: f64,
     pub development_simulated_model_time: f64,
     pub simulated_model_time: f64,
     pub light_updates: u32,
@@ -201,6 +204,7 @@ pub struct Simulation {
     exposure_steps_total: u32,
     exposure_step: u32,
     development_step: u32,
+    development_simulated_model_time: f64,
     total_updates: u32,
     light_updates: u32,
     dark_updates: u32,
@@ -248,6 +252,7 @@ impl Simulation {
             exposure_steps_total: config.exposure_steps_total,
             exposure_step: 0,
             development_step: 0,
+            development_simulated_model_time: 0.0,
             total_updates: 0,
             light_updates: 0,
             dark_updates: 0,
@@ -310,6 +315,7 @@ impl Simulation {
         self.snapshot.fill(0.0);
         self.exposure_step = 0;
         self.development_step = 0;
+        self.development_simulated_model_time = 0.0;
         self.total_updates = 0;
         self.light_updates = 0;
         self.dark_updates = 0;
@@ -361,16 +367,17 @@ impl Simulation {
     /// PI, oxygen, radicals, and conversion still evolve with the identical
     /// fixed-step equations. The explicit progress preserves a future movable
     /// focus contract, although source-off dynamics are focus independent.
+    /// Dark updates advance chemistry time without consuming the illuminated
+    /// scan schedule, so a paused or completed exposure can continue relaxing.
     pub fn advance_dark_steps(
         &mut self,
         step_count: u32,
         progress: f64,
     ) -> Result<u32, ValidationError> {
         validate_progress(progress)?;
-        let steps = step_count.min(self.exposure_steps_total - self.exposure_step);
+        let steps = step_count.min(MAX_EXPOSURE_STEPS_TOTAL - self.dark_updates);
         for _ in 0..steps {
             self.step_exposure(progress, 0.0);
-            self.exposure_step += 1;
             self.total_updates += 1;
             self.dark_updates += 1;
         }
@@ -386,6 +393,8 @@ impl Simulation {
         for _ in 0..steps {
             self.step_development();
             self.development_step += 1;
+            self.development_simulated_model_time +=
+                self.parameters.development_time / DEVELOPMENT_STEPS_TOTAL as f64;
             self.total_updates += 1;
         }
         steps
@@ -414,9 +423,9 @@ impl Simulation {
 
     /// Current compact diagnostic state.
     pub fn diagnostics(&self) -> Diagnostics {
-        let exposure_time = self.exposure_step as f64 * FIXED_TIMESTEP_MODEL_TIME;
-        let development_time = self.development_step as f64
-            * (self.parameters.development_time / DEVELOPMENT_STEPS_TOTAL as f64);
+        let exposure_time = self.light_updates as f64 * FIXED_TIMESTEP_MODEL_TIME;
+        let dark_time = self.dark_updates as f64 * FIXED_TIMESTEP_MODEL_TIME;
+        let development_time = self.development_simulated_model_time;
         Diagnostics {
             solver: "Rust/Wasm",
             grid_width: GRID_WIDTH,
@@ -429,8 +438,9 @@ impl Simulation {
             development_step: self.development_step,
             development_steps_total: DEVELOPMENT_STEPS_TOTAL,
             exposure_simulated_model_time: exposure_time,
+            dark_simulated_model_time: dark_time,
             development_simulated_model_time: development_time,
-            simulated_model_time: exposure_time + development_time,
+            simulated_model_time: exposure_time + dark_time + development_time,
             light_updates: self.light_updates,
             dark_updates: self.dark_updates,
             total_updates: self.total_updates,
@@ -692,6 +702,11 @@ impl Simulation {
         hash = fnv_word(hash, self.seed);
         hash = fnv_word(hash, self.exposure_step);
         hash = fnv_word(hash, self.development_step);
+        hash = fnv_word(hash, self.light_updates);
+        hash = fnv_word(hash, self.dark_updates);
+        let development_time_bits = self.development_simulated_model_time.to_bits();
+        hash = fnv_word(hash, development_time_bits as u32);
+        hash = fnv_word(hash, (development_time_bits >> 32) as u32);
         for field in [
             &self.state.photoinitiator,
             &self.state.oxygen,
@@ -892,6 +907,45 @@ mod tests {
     }
 
     #[test]
+    fn dark_chemistry_continues_without_consuming_scan_progress() {
+        let mut sim = simulation(Parameters::default(), 2);
+        assert_eq!(sim.advance_exposure_steps(2), 2);
+        let checksum_after_light = sim.diagnostics().checksum;
+
+        assert_eq!(sim.advance_dark_steps(3, 0.5).unwrap(), 3);
+
+        let diagnostics = sim.diagnostics();
+        assert_eq!(diagnostics.exposure_step, 2);
+        assert_eq!(diagnostics.light_updates, 2);
+        assert_eq!(diagnostics.dark_updates, 3);
+        assert_eq!(diagnostics.total_updates, 5);
+        assert_eq!(
+            diagnostics.exposure_simulated_model_time,
+            2.0 * FIXED_TIMESTEP_MODEL_TIME,
+        );
+        assert_eq!(
+            diagnostics.dark_simulated_model_time,
+            3.0 * FIXED_TIMESTEP_MODEL_TIME,
+        );
+        assert_eq!(
+            diagnostics.simulated_model_time,
+            5.0 * FIXED_TIMESTEP_MODEL_TIME,
+        );
+        assert_ne!(diagnostics.checksum, checksum_after_light);
+    }
+
+    #[test]
+    fn dark_chemistry_respects_the_bounded_update_budget() {
+        let mut sim = simulation(Parameters::default(), 1);
+        sim.dark_updates = MAX_EXPOSURE_STEPS_TOTAL - 1;
+        sim.total_updates = MAX_EXPOSURE_STEPS_TOTAL - 1;
+
+        assert_eq!(sim.advance_dark_steps(3, 0.5).unwrap(), 1);
+        assert_eq!(sim.dark_updates, MAX_EXPOSURE_STEPS_TOTAL);
+        assert_eq!(sim.advance_dark_steps(1, 0.5).unwrap(), 0);
+    }
+
+    #[test]
     fn validation_rejects_nonfinite_negative_and_unstable_values_transactionally() {
         let mut sim = simulation(Parameters::default(), 16);
         let original = sim.parameters.clone();
@@ -903,6 +957,16 @@ mod tests {
 
         let mut invalid = original.clone();
         invalid.initiator = -0.01;
+        assert!(sim.set_parameters(invalid).is_err());
+        assert_eq!(sim.parameters, original);
+
+        let mut invalid = original.clone();
+        invalid.passes = f64::MAX;
+        assert!(sim.set_parameters(invalid).is_err());
+        assert_eq!(sim.parameters, original);
+
+        let mut invalid = original.clone();
+        invalid.passes = 1.5;
         assert!(sim.set_parameters(invalid).is_err());
         assert_eq!(sim.parameters, original);
 
@@ -1134,6 +1198,35 @@ mod tests {
         }
         assert!(previous_radical < 1.0);
         assert!(previous_conversion > 0.0);
+    }
+
+    #[test]
+    fn development_time_accumulates_across_live_parameter_changes() {
+        let mut sim = simulation(Parameters::default(), 1);
+        let first_step_time =
+            sim.parameters.development_time / DEVELOPMENT_STEPS_TOTAL as f64;
+        assert_eq!(sim.advance_development_steps(1), 1);
+        assert_eq!(
+            sim.diagnostics().development_simulated_model_time,
+            first_step_time,
+        );
+
+        let mut updated = sim.parameters.clone();
+        updated.development_time = 90.0;
+        sim.set_parameters(updated).unwrap();
+        assert_eq!(
+            sim.diagnostics().development_simulated_model_time,
+            first_step_time,
+        );
+
+        assert_eq!(sim.advance_development_steps(1), 1);
+        assert_eq!(
+            sim.diagnostics().development_simulated_model_time,
+            first_step_time + 90.0 / DEVELOPMENT_STEPS_TOTAL as f64,
+        );
+
+        sim.reset(SEED);
+        assert_eq!(sim.diagnostics().development_simulated_model_time, 0.0);
     }
 
     #[test]

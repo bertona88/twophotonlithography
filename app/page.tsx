@@ -96,6 +96,10 @@ type RunResult = {
   oxygen: Uint8Array;
   radicals: Uint8Array;
   remaining: Uint8Array;
+  lensPixels: Uint8Array;
+  lensWidth: number;
+  lensHeight: number;
+  diagnostics: SolverDiagnostics;
   diffusion: number;
 };
 
@@ -473,10 +477,12 @@ function ParamRow({
   definition,
   value,
   onChange,
+  disabled,
 }: {
   definition: ParameterDefinition;
   value: number;
   onChange: (value: number) => void;
+  disabled: boolean;
 }) {
   const provenance = definition.provenance ?? "input";
   return (
@@ -496,6 +502,7 @@ function ParamRow({
           max={definition.max}
           step={definition.step}
           value={value}
+          disabled={disabled}
           onChange={(event) => onChange(Number(event.target.value))}
         />
         <label className="numeric-entry">
@@ -506,6 +513,7 @@ function ParamRow({
             max={definition.max}
             step={definition.step}
             value={value}
+            disabled={disabled}
             onChange={(event) => onChange(Number(event.target.value))}
           />
           <span>{definition.unit}</span>
@@ -742,6 +750,14 @@ export default function Home() {
       }
       if (message.type === "commandError") {
         setNotice(message.message || "The simulation command was rejected.");
+        if (message.stage) {
+          setStage(message.stage);
+        }
+        if (message.command === "slice") {
+          setDirty("slice");
+        } else if (message.command === "configure") {
+          setDirty("physics");
+        }
         return;
       }
       if (message.type === "sliceResult") {
@@ -764,6 +780,9 @@ export default function Home() {
         ? new Uint8Array(message.radicals)
         : new Uint8Array(nextConversion.length);
       const nextRemaining = new Uint8Array(message.remaining);
+      const nextLensPixels = new Uint8Array(message.lens);
+      const nextDiagnostics =
+        message.diagnostics ?? EMPTY_SOLVER_DIAGNOSTICS;
       latestArraysRef.current = {
         conversion: nextConversion,
         oxygen: nextOxygen,
@@ -774,7 +793,7 @@ export default function Home() {
       setOxygen(nextOxygen);
       setRadicals(nextRadicals);
       setRemaining(nextRemaining);
-      setLensPixels(new Uint8Array(message.lens));
+      setLensPixels(nextLensPixels);
       setLensWidth(message.lensWidth);
       setLensHeight(message.lensHeight);
       setMetrics(message.metrics);
@@ -782,9 +801,7 @@ export default function Home() {
       setDevelopmentProgress(message.developmentProgress);
       setSimulatedSeconds(message.simulatedSeconds);
       setFocus(message.focus);
-      if (message.diagnostics) {
-        setSolverDiagnostics(message.diagnostics);
-      }
+      setSolverDiagnostics(nextDiagnostics);
 
       if (message.stage === "complete" && variantRunningRef.current) {
         variantRunningRef.current = false;
@@ -794,6 +811,10 @@ export default function Home() {
           oxygen: nextOxygen.slice(),
           radicals: nextRadicals.slice(),
           remaining: nextRemaining.slice(),
+          lensPixels: nextLensPixels.slice(),
+          lensWidth: message.lensWidth,
+          lensHeight: message.lensHeight,
+          diagnostics: nextDiagnostics,
           diffusion: variantDiffusionRef.current,
         });
         setStage("compare");
@@ -887,13 +908,17 @@ export default function Home() {
 
   const branchOxygen = useCallback(() => {
     const arrays = latestArraysRef.current;
-    if (!arrays) return;
+    if (!arrays || !lensPixels) return;
     setBaseline({
       metrics,
       conversion: arrays.conversion.slice(),
       oxygen: arrays.oxygen.slice(),
       radicals: arrays.radicals.slice(),
       remaining: arrays.remaining.slice(),
+      lensPixels: lensPixels.slice(),
+      lensWidth,
+      lensHeight,
+      diagnostics: solverDiagnostics,
       diffusion: params.oxygenDiffusion,
     });
     setVariant(null);
@@ -909,7 +934,14 @@ export default function Home() {
     workerRef.current?.postMessage({ type: "start" });
     setStage("exposing");
     setNotice("Branch B is replaying the identical path with 2× oxygen diffusion.");
-  }, [metrics, params]);
+  }, [
+    lensHeight,
+    lensPixels,
+    lensWidth,
+    metrics,
+    params,
+    solverDiagnostics,
+  ]);
 
   const primaryAction = useCallback(() => {
     if (solverState !== "ready") return;
@@ -976,31 +1008,25 @@ export default function Home() {
     return `Show run ${comparisonView === "A" ? "B" : "A"}`;
   }, [dirty, stage, exposureProgress, comparisonView, solverState]);
 
-  const displayArrays = useMemo(() => {
+  const selectedRun = useMemo(() => {
     if (stage === "compare" && comparisonView === "A" && baseline) {
       return baseline;
     }
     if (stage === "compare" && comparisonView === "B" && variant) {
       return variant;
     }
-    return { conversion, oxygen, radicals, remaining };
-  }, [
-    stage,
-    comparisonView,
-    baseline,
-    variant,
-    conversion,
-    oxygen,
-    radicals,
-    remaining,
-  ]);
+    return null;
+  }, [baseline, comparisonView, stage, variant]);
 
-  const displayMetrics =
-    stage === "compare" && comparisonView === "A" && baseline
-      ? baseline.metrics
-      : stage === "compare" && comparisonView === "B" && variant
-        ? variant.metrics
-        : metrics;
+  const displayArrays =
+    selectedRun ?? { conversion, oxygen, radicals, remaining };
+
+  const displayMetrics = selectedRun?.metrics ?? metrics;
+  const displayLensPixels = selectedRun?.lensPixels ?? lensPixels;
+  const displayLensWidth = selectedRun?.lensWidth ?? lensWidth;
+  const displayLensHeight = selectedRun?.lensHeight ?? lensHeight;
+  const displaySolverDiagnostics =
+    selectedRun?.diagnostics ?? solverDiagnostics;
 
   const activeProcess = processIndex(stage, exposureProgress);
   const timelineProgress =
@@ -1163,14 +1189,14 @@ export default function Home() {
       </section>
 
       <ReactionLens
-        pixels={lensPixels}
-        width={lensWidth}
-        height={lensHeight}
+        pixels={displayLensPixels}
+        width={displayLensWidth}
+        height={displayLensHeight}
         fieldMode={fieldMode}
         onFieldMode={setFieldMode}
         metrics={displayMetrics}
         solverState={solverState}
-        diagnostics={solverDiagnostics}
+        diagnostics={displaySolverDiagnostics}
       />
 
       <aside className={`parameter-dock ${panelOpen ? "open" : ""}`}>
@@ -1255,6 +1281,7 @@ export default function Home() {
                   definition={definition}
                   value={params[definition.key]}
                   onChange={(value) => updateParam(definition.key, value)}
+                  disabled={stage === "slicing"}
                 />
               ))}
             </div>
@@ -1280,13 +1307,25 @@ export default function Home() {
 
       <div className="preset-rail" aria-label="Physics experiment presets">
         <span className="eyebrow">Experiments</span>
-        <button onClick={() => applyPreset("wake")} type="button">
+        <button
+          onClick={() => applyPreset("wake")}
+          type="button"
+          disabled={stage === "slicing"}
+        >
           Twice-written wake
         </button>
-        <button onClick={() => applyPreset("cliff")} type="button">
+        <button
+          onClick={() => applyPreset("cliff")}
+          type="button"
+          disabled={stage === "slicing"}
+        >
           Power cliff
         </button>
-        <button onClick={() => applyPreset("fine")} type="button">
+        <button
+          onClick={() => applyPreset("fine")}
+          type="button"
+          disabled={stage === "slicing"}
+        >
           Fine roof
         </button>
       </div>

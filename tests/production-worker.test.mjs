@@ -85,6 +85,12 @@ function waitForMessage(worker, predicate, description) {
   });
 }
 
+function postAndWait(worker, message, predicate, description) {
+  const response = waitForMessage(worker, predicate, description);
+  worker.postMessage(message);
+  return response;
+}
+
 test("production worker initializes browser Wasm and honors its message contract", async () => {
   const workerPath = await productionWorkerPath();
   const worker = new Worker(
@@ -158,6 +164,133 @@ test("production worker initializes browser Wasm and honors its message contract
       "a validation error for unsafe hatch spacing",
     );
     assert.match(commandError.message, /hatchSpacing/i);
+    assert.equal(commandError.stage, "ready");
+
+    const exposing = await postAndWait(
+      worker,
+      { type: "start" },
+      (message) => message.type === "snapshot" && message.stage === "exposing",
+      "the exposure start snapshot",
+    );
+    assert.equal(exposing.exposureProgress, 0);
+
+    const advanced = await waitForMessage(
+      worker,
+      (message) =>
+        message.type === "snapshot" &&
+        message.stage === "exposing" &&
+        message.exposureProgress > 0,
+      "an advanced exposure snapshot",
+    );
+    assert.ok(advanced.diagnostics.exposureStep > 0);
+
+    const paused = await postAndWait(
+      worker,
+      { type: "pause" },
+      (message) => message.type === "snapshot" && message.stage === "paused",
+      "the paused exposure snapshot",
+    );
+    assert.ok(paused.exposureProgress > 0 && paused.exposureProgress < 1);
+
+    const resumed = await postAndWait(
+      worker,
+      { type: "resume" },
+      (message) => message.type === "snapshot" && message.stage === "exposing",
+      "the resumed exposure snapshot",
+    );
+    assert.equal(resumed.exposureProgress, paused.exposureProgress);
+
+    const exposureComplete = await waitForMessage(
+      worker,
+      (message) =>
+        message.type === "snapshot" &&
+        message.stage === "paused" &&
+        message.exposureProgress === 1,
+      "exposure completion",
+    );
+    assert.equal(
+      exposureComplete.diagnostics.exposureStep,
+      exposureComplete.diagnostics.exposureStepsTotal,
+    );
+
+    await postAndWait(
+      worker,
+      { type: "develop" },
+      (message) => message.type === "snapshot" && message.stage === "developing",
+      "the development start snapshot",
+    );
+    const developed = await waitForMessage(
+      worker,
+      (message) =>
+        message.type === "snapshot" &&
+        message.stage === "complete" &&
+        message.developmentProgress === 1,
+      "development completion",
+    );
+    assert.equal(
+      developed.diagnostics.developmentStep,
+      developed.diagnostics.developmentStepsTotal,
+    );
+    assert.ok(developed.metrics.survivingFraction < 1);
+
+    const reset = await postAndWait(
+      worker,
+      { type: "reset" },
+      (message) =>
+        message.type === "snapshot" &&
+        message.stage === "ready" &&
+        message.exposureProgress === 0 &&
+        message.developmentProgress === 0,
+      "a reset snapshot",
+    );
+    assert.equal(reset.metrics.checksum, snapshot.metrics.checksum);
+  } finally {
+    await worker.terminate();
+  }
+});
+
+test("production worker reports a persistent Wasm initialization failure", async () => {
+  const workerPath = await productionWorkerPath();
+  const worker = new Worker(
+    new URL("./helpers/production-worker-shim.mjs", import.meta.url),
+    {
+      type: "module",
+      workerData: {
+        clientRoot: CLIENT_ROOT,
+        workerPath,
+        wasmFailure: "invalid",
+      },
+    },
+  );
+
+  try {
+    const initializing = waitForMessage(
+      worker,
+      (message) =>
+        message.type === "solverStatus" && message.status === "initializing",
+      "the initializing status before a Wasm failure",
+    );
+    const failed = waitForMessage(
+      worker,
+      (message) =>
+        message.type === "solverStatus" && message.status === "error",
+      "the Wasm initialization error",
+    );
+    const rejected = waitForMessage(
+      worker,
+      (message) =>
+        message.type === "commandError" && message.command === "slice",
+      "the queued command rejection",
+    );
+
+    worker.postMessage({ type: "slice", params: parameters });
+    await initializing;
+    const [failure, commandError] = await Promise.all([failed, rejected]);
+    assert.equal(failure.solver, "Rust/Wasm");
+    assert.ok(failure.message);
+    assert.equal(commandError.solver, "Rust/Wasm");
+    assert.equal(commandError.stage, "model");
+    assert.equal(commandError.message, failure.message);
   } finally {
     await worker.terminate();
   }

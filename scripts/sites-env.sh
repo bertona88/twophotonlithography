@@ -3,6 +3,20 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 runtime_root="${SITES_RUNTIME_ROOT:-${project_root}/.sites-runtime}"
+user_home_before_sites="${HOME:-}"
+
+# Rustup proxies locate their toolchain through HOME when RUSTUP_HOME and
+# CARGO_HOME are unset. Preserve the caller's standard rustup installation
+# before isolating browser/build caches under .sites-runtime.
+if [[ -z "${RUSTUP_HOME:-}" && -d "${user_home_before_sites}/.rustup" ]]; then
+  export RUSTUP_HOME="${user_home_before_sites}/.rustup"
+fi
+if [[ -z "${CARGO_HOME:-}" && -d "${user_home_before_sites}/.cargo" ]]; then
+  export CARGO_HOME="${user_home_before_sites}/.cargo"
+fi
+if [[ -n "${CARGO_HOME:-}" && -d "${CARGO_HOME}/bin" ]]; then
+  export PATH="${CARGO_HOME}/bin:${PATH:-}"
+fi
 
 mkdir -p \
   "${runtime_root}/home" \

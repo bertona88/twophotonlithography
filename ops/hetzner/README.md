@@ -31,6 +31,17 @@ Make sure the systemd service and deploy script can find `cargo`, `rustc`, and
 build checks the exact `wasm-pack` version and stops instead of producing a
 JavaScript-only release when Rust/Wasm tooling is missing.
 
+The checked-in deploy unit exposes the root rustup installation explicitly.
+After replacing the existing unit or deploy script, reload systemd:
+
+```bash
+sudo install -m 0755 ops/hetzner/twophotonlithography-deploy \
+  /usr/local/sbin/twophotonlithography-deploy
+sudo install -m 0644 ops/hetzner/twophotonlithography-deploy.service \
+  /etc/systemd/system/twophotonlithography-deploy.service
+sudo systemctl daemon-reload
+```
+
 ## Release flow
 
 For a new revision, `/usr/local/sbin/twophotonlithography-deploy`:

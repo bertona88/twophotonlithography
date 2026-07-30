@@ -83,6 +83,7 @@ type RustDiagnostics = {
   developmentStepsTotal: number;
   exposureSimulatedModelTime?: number;
   exposureSimulatedTimeSeconds?: number;
+  darkSimulatedModelTime?: number;
   developmentSimulatedModelTime?: number;
   developmentSimulatedTimeSeconds?: number;
   simulatedModelTime?: number;
@@ -152,6 +153,7 @@ function postCommandError(command: string, error: unknown) {
     command,
     message: errorMessage(error),
     solver: "Rust/Wasm",
+    stage,
   });
 }
 
@@ -226,6 +228,7 @@ function normalizedDiagnostics(raw: RustDiagnostics) {
     raw.exposureSimulatedModelTime ??
     raw.exposureSimulatedTimeSeconds ??
     raw.exposureStep * timestepModel;
+  const darkSimulatedModelTime = raw.darkSimulatedModelTime ?? 0;
   const developmentSimulatedModelTime =
     raw.developmentSimulatedModelTime ??
     raw.developmentSimulatedTimeSeconds ??
@@ -233,12 +236,15 @@ function normalizedDiagnostics(raw: RustDiagnostics) {
   const simulatedModelTime =
     raw.simulatedModelTime ??
     raw.simulatedTimeSeconds ??
-    exposureSimulatedModelTime + developmentSimulatedModelTime;
+    exposureSimulatedModelTime +
+      darkSimulatedModelTime +
+      developmentSimulatedModelTime;
 
   return {
     ...raw,
     timestepModel,
     exposureSimulatedModelTime,
+    darkSimulatedModelTime,
     developmentSimulatedModelTime,
     simulatedModelTime,
     updatesPerSecond,

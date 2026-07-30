@@ -109,6 +109,10 @@ rsync -a \
   --exclude='.sites-runtime' \
   --exclude='dist' \
   --exclude='node_modules' \
+  --exclude='.wasm-test' \
+  --exclude='app/wasm/reaction_lens' \
+  --exclude='rust/reaction-lens/pkg' \
+  --exclude='rust/reaction-lens/target' \
   "${REPO_DIR}/" "${release_dir}.tmp/"
 cp -a "${REPO_DIR}/dist" "${release_dir}.tmp/dist"
 cp -al "${REPO_DIR}/node_modules" "${release_dir}.tmp/node_modules"

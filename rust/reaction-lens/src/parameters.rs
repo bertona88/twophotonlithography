@@ -8,7 +8,7 @@ use crate::simulation::{
     FIXED_TIMESTEP_MODEL_TIME, MAX_INTERNAL_SUBSTEPS_PER_UPDATE,
 };
 
-const MAX_EXPOSURE_STEPS_TOTAL: u32 = 10_000_000;
+pub(crate) const MAX_EXPOSURE_STEPS_TOTAL: u32 = 10_000_000;
 const MAX_EXPLICIT_DIFFUSION_COURANT: f64 = 0.5;
 
 /// Small, JSON-like configuration passed once while constructing the Wasm core.
@@ -102,7 +102,12 @@ impl Default for Parameters {
 impl Parameters {
     /// Reject values that cannot be evolved safely by the explicit solver.
     pub fn validate(&self) -> Result<(), ValidationError> {
-        positive("passes", self.passes)?;
+        finite("passes", self.passes)?;
+        if !(1.0..=3.0).contains(&self.passes) || self.passes.fract() != 0.0 {
+            return Err(ValidationError::new(
+                "passes must be a whole number between one and three",
+            ));
+        }
         nonnegative("power", self.power)?;
         positive("speed", self.speed)?;
         positive("repetitionRate", self.repetition_rate)?;
