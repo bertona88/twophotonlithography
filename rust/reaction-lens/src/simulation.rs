@@ -1,8 +1,6 @@
 use serde::Serialize;
 
-use crate::parameters::{
-    Parameters, SimulationConfig, ValidationError, MAX_EXPOSURE_STEPS_TOTAL,
-};
+use crate::parameters::{Parameters, SimulationConfig, ValidationError, MAX_EXPOSURE_STEPS_TOTAL};
 
 pub const GRID_WIDTH: usize = 112;
 pub const GRID_HEIGHT: usize = 68;
@@ -1203,8 +1201,7 @@ mod tests {
     #[test]
     fn development_time_accumulates_across_live_parameter_changes() {
         let mut sim = simulation(Parameters::default(), 1);
-        let first_step_time =
-            sim.parameters.development_time / DEVELOPMENT_STEPS_TOTAL as f64;
+        let first_step_time = sim.parameters.development_time / DEVELOPMENT_STEPS_TOTAL as f64;
         assert_eq!(sim.advance_development_steps(1), 1);
         assert_eq!(
             sim.diagnostics().development_simulated_model_time,
