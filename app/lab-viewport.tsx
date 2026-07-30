@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { initializeRenderer } from "./renderer-initialization";
 
 export type FieldMode = "conversion" | "oxygen" | "radicals" | "development";
 
@@ -36,6 +37,9 @@ type SceneHandles = {
   resizeObserver: ResizeObserver;
   animationFrame: number;
 };
+
+const RENDERER_UNAVAILABLE_MESSAGE =
+  "This browser could not start WebGL 2. The simulation controls and 2D Reaction Lens remain available.";
 
 const VIOLET = new THREE.Color("#8b5cff");
 const CYAN = new THREE.Color("#46d8ff");
@@ -410,16 +414,45 @@ export default function LabViewport({
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const handlesRef = useRef<SceneHandles | null>(null);
+  const [rendererUnavailable, setRendererUnavailable] = useState(false);
 
   useEffect(() => {
     const container = containerRef.current;
     const canvas = canvasRef.current;
     if (!container || !canvas) return;
-    const handles = buildScene(canvas, container);
-    handlesRef.current = handles;
+
+    let handles: SceneHandles | null = null;
+    let disposed = false;
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      if (handles) {
+        cancelAnimationFrame(handles.animationFrame);
+      }
+      setRendererUnavailable(true);
+    };
+
+    canvas.addEventListener("webglcontextlost", handleContextLost);
+    handles = initializeRenderer(
+      () => buildScene(canvas, container),
+      () => {
+        if (!disposed) {
+          setRendererUnavailable(true);
+        }
+      },
+    );
+    if (handles) {
+      handlesRef.current = handles;
+    }
+
     return () => {
-      disposeScene(handles);
-      handlesRef.current = null;
+      disposed = true;
+      canvas.removeEventListener("webglcontextlost", handleContextLost);
+      if (handles) {
+        disposeScene(handles);
+        if (handlesRef.current === handles) {
+          handlesRef.current = null;
+        }
+      }
     };
   }, []);
 
@@ -522,12 +555,32 @@ export default function LabViewport({
   }, [selectedLayer, layerHeight]);
 
   return (
-    <div className="lab-viewport" ref={containerRef}>
+    <div
+      className="lab-viewport"
+      data-renderer-state={rendererUnavailable ? "unavailable" : "ready"}
+      ref={containerRef}
+    >
       <canvas
         ref={canvasRef}
         className="lab-canvas"
+        aria-hidden={rendererUnavailable}
         aria-label="Interactive three-dimensional Micro-Benchy exposure chamber"
       />
+      {rendererUnavailable ? (
+        <div
+          className="lab-viewport-fallback"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="eyebrow">3D viewport</span>
+          <strong>3D preview unavailable</strong>
+          <p>{RENDERER_UNAVAILABLE_MESSAGE}</p>
+          <small>
+            Enable hardware acceleration or use a WebGL 2-capable browser to
+            restore the interactive chamber.
+          </small>
+        </div>
+      ) : null}
     </div>
   );
 }
