@@ -9,6 +9,7 @@ import {
 } from "react";
 import dynamic from "next/dynamic";
 import type { FieldMode } from "./lab-viewport";
+import { shouldIgnoreLabShortcut } from "./keyboard-shortcuts";
 
 const LabViewport = dynamic(() => import("./lab-viewport"), {
   ssr: false,
@@ -26,6 +27,7 @@ type LabStage =
 
 type PanelTab = "specimen" | "path" | "light" | "resin" | "development";
 type DirtyKind = "slice" | "physics" | null;
+type PresetKey = "wake" | "cliff" | "fine";
 
 type ModelParams = {
   layerHeight: number;
@@ -463,6 +465,15 @@ const PANEL_LABELS: Record<PanelTab, { short: string; full: string; glyph: strin
     development: { short: "Develop", full: "Development", glyph: "∇" },
   };
 
+const MOBILE_LAYOUT_QUERY =
+  "(max-width: 840px), (max-height: 540px) and (pointer: coarse) and (orientation: landscape)";
+
+const PRESETS: Array<{ key: PresetKey; label: string }> = [
+  { key: "wake", label: "Twice-written wake" },
+  { key: "cliff", label: "Power cliff" },
+  { key: "fine", label: "Fine roof" },
+];
+
 function formatNumber(value: number, digits = 2) {
   if (Math.abs(value) < 0.001 && value !== 0) return value.toExponential(2);
   return value.toLocaleString("en-US", { maximumFractionDigits: digits });
@@ -529,6 +540,8 @@ function ReactionLens({
   height,
   fieldMode,
   onFieldMode,
+  mobileOpen,
+  onMobileClose,
   metrics,
   solverState,
   diagnostics,
@@ -538,6 +551,8 @@ function ReactionLens({
   height: number;
   fieldMode: FieldMode;
   onFieldMode: (mode: FieldMode) => void;
+  mobileOpen: boolean;
+  onMobileClose: () => void;
   metrics: Metrics;
   solverState: SolverState;
   diagnostics: SolverDiagnostics;
@@ -596,7 +611,12 @@ function ReactionLens({
   }, [pixels, width, height, fieldMode]);
 
   return (
-    <section className="reaction-lens glass-panel" aria-label="Reaction Lens">
+    <section
+      className={`reaction-lens glass-panel ${mobileOpen ? "mobile-open" : ""}`}
+      id="reaction-lens-panel"
+      aria-label="Reaction Lens"
+      data-mobile-open={mobileOpen ? "true" : "false"}
+    >
       <div className="lens-heading">
         <div>
           <span className="eyebrow">Reaction Lens</span>
@@ -606,6 +626,14 @@ function ReactionLens({
           <i />
           {solverState === "ready" ? `${metrics.cellSizeNm} nm cells` : solverState}
         </span>
+        <button
+          className="mobile-lens-close"
+          onClick={onMobileClose}
+          type="button"
+          aria-label="Close Reaction Lens"
+        >
+          ×
+        </button>
       </div>
       <div className="lens-canvas-wrap">
         <canvas ref={canvasRef} className="lens-canvas" />
@@ -688,6 +716,9 @@ export default function Home() {
   const workerRef = useRef<Worker | null>(null);
   const variantRunningRef = useRef(false);
   const variantDiffusionRef = useRef(DEFAULT_PARAMS.oxygenDiffusion);
+  const lensTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const parameterSheetRef = useRef<HTMLElement | null>(null);
+  const parameterCloseRef = useRef<HTMLButtonElement | null>(null);
   const latestArraysRef = useRef<{
     conversion: Uint8Array;
     oxygen: Uint8Array;
@@ -698,7 +729,9 @@ export default function Home() {
   const [params, setParams] = useState<ModelParams>(DEFAULT_PARAMS);
   const [stage, setStage] = useState<LabStage>("model");
   const [panelTab, setPanelTab] = useState<PanelTab>("resin");
-  const [panelOpen, setPanelOpen] = useState(true);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [isMobileLayout, setIsMobileLayout] = useState(false);
+  const [mobileLensOpen, setMobileLensOpen] = useState(false);
   const [dirty, setDirty] = useState<DirtyKind>(null);
   const [fieldMode, setFieldMode] = useState<FieldMode>("conversion");
   const [pathPositions, setPathPositions] = useState<Float32Array | null>(null);
@@ -727,6 +760,98 @@ export default function Home() {
   const [solverError, setSolverError] = useState<string | null>(null);
   const [solverDiagnostics, setSolverDiagnostics] =
     useState<SolverDiagnostics>(EMPTY_SOLVER_DIAGNOSTICS);
+
+  useEffect(() => {
+    const mobileQuery = window.matchMedia(MOBILE_LAYOUT_QUERY);
+    const orientationQuery = window.matchMedia("(orientation: landscape)");
+    let previousMatch = mobileQuery.matches;
+
+    const applyLayout = (matches: boolean, initial = false) => {
+      setIsMobileLayout(matches);
+      setMobileLensOpen(false);
+      if (initial) {
+        setPanelOpen(!matches);
+      } else if (matches || previousMatch !== matches) {
+        setPanelOpen(false);
+      }
+      previousMatch = matches;
+    };
+
+    applyLayout(mobileQuery.matches, true);
+    const handleChange = (event: MediaQueryListEvent) => {
+      applyLayout(event.matches);
+    };
+    const handleOrientationChange = () => {
+      if (!mobileQuery.matches) return;
+      setPanelOpen(false);
+      setMobileLensOpen(false);
+    };
+    mobileQuery.addEventListener("change", handleChange);
+    orientationQuery.addEventListener("change", handleOrientationChange);
+    return () => {
+      mobileQuery.removeEventListener("change", handleChange);
+      orientationQuery.removeEventListener("change", handleOrientationChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileLayout || !panelOpen) return;
+    const dialog = parameterSheetRef.current;
+    if (!dialog) return;
+
+    const returnTarget =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const focusableSelector = [
+      "button:not([disabled])",
+      "input:not([disabled])",
+      "select:not([disabled])",
+      "textarea:not([disabled])",
+      "a[href]",
+      "[tabindex]:not([tabindex='-1'])",
+    ].join(",");
+
+    const handleDialogKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setPanelOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(focusableSelector),
+      ).filter((element) => element.getClientRects().length > 0);
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleDialogKey);
+    const focusFrame = window.requestAnimationFrame(() => {
+      parameterCloseRef.current?.focus();
+    });
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", handleDialogKey);
+      if (returnTarget?.isConnected) {
+        returnTarget.focus();
+      }
+    };
+  }, [isMobileLayout, panelOpen]);
 
   useEffect(() => {
     const worker = new Worker(new URL("./simulation.worker.ts", import.meta.url), {
@@ -841,10 +966,7 @@ export default function Home() {
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
-      if (
-        event.target instanceof HTMLInputElement ||
-        event.target instanceof HTMLTextAreaElement
-      ) {
+      if (shouldIgnoreLabShortcut(event)) {
         return;
       }
       if (solverState !== "ready") return;
@@ -1034,7 +1156,7 @@ export default function Home() {
       ? exposureProgress * 0.82 + developmentProgress * 0.18
       : exposureProgress * 0.82;
 
-  const applyPreset = (preset: "wake" | "cliff" | "fine") => {
+  const applyPreset = (preset: PresetKey) => {
     let next = { ...params };
     if (preset === "wake") {
       next = {
@@ -1188,32 +1310,83 @@ export default function Home() {
         )}
       </section>
 
+      <nav className="mobile-quick-tools" aria-label="Lab tools">
+        <button
+          ref={lensTriggerRef}
+          className={mobileLensOpen ? "active" : ""}
+          onClick={() => {
+            setPanelOpen(false);
+            setMobileLensOpen((value) => !value);
+          }}
+          type="button"
+          aria-controls="reaction-lens-panel"
+          aria-expanded={mobileLensOpen}
+        >
+          <span aria-hidden="true">⌗</span>
+          Reaction Lens
+        </button>
+        <button
+          className={panelOpen ? "active" : ""}
+          onClick={() => {
+            setMobileLensOpen(false);
+            setPanelOpen(true);
+          }}
+          type="button"
+          aria-controls="parameter-sheet"
+          aria-expanded={panelOpen}
+        >
+          <span aria-hidden="true">⌁</span>
+          Parameters
+        </button>
+      </nav>
+
       <ReactionLens
         pixels={displayLensPixels}
         width={displayLensWidth}
         height={displayLensHeight}
         fieldMode={fieldMode}
         onFieldMode={setFieldMode}
+        mobileOpen={mobileLensOpen}
+        onMobileClose={() => {
+          lensTriggerRef.current?.focus();
+          setMobileLensOpen(false);
+        }}
         metrics={displayMetrics}
         solverState={solverState}
         diagnostics={displaySolverDiagnostics}
       />
 
-      <aside className={`parameter-dock ${panelOpen ? "open" : ""}`}>
+      <aside
+        className={`parameter-dock ${panelOpen ? "open" : ""}`}
+        data-mobile-layout={isMobileLayout ? "true" : "false"}
+        aria-hidden={isMobileLayout && !panelOpen ? true : undefined}
+      >
+        <button
+          className="mobile-sheet-backdrop"
+          onClick={() => setPanelOpen(false)}
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
+        />
         <div className="parameter-spine" aria-label="Parameter groups">
           {(Object.keys(PANEL_LABELS) as PanelTab[]).map((tab) => (
             <button
               key={tab}
               className={panelTab === tab && panelOpen ? "active" : ""}
               onClick={() => {
-                if (panelTab === tab) setPanelOpen((value) => !value);
-                else {
+                if (isMobileLayout) {
+                  setPanelTab(tab);
+                  setPanelOpen(true);
+                } else if (panelTab === tab) {
+                  setPanelOpen((value) => !value);
+                } else {
                   setPanelTab(tab);
                   setPanelOpen(true);
                 }
               }}
               type="button"
               aria-label={PANEL_LABELS[tab].full}
+              aria-pressed={panelTab === tab && panelOpen}
             >
               <span>{PANEL_LABELS[tab].glyph}</span>
               <small>{PANEL_LABELS[tab].short}</small>
@@ -1221,14 +1394,25 @@ export default function Home() {
           ))}
         </div>
 
-        <section className="parameter-sheet glass-panel">
+        <section
+          className="parameter-sheet glass-panel"
+          id="parameter-sheet"
+          ref={parameterSheetRef}
+          role={isMobileLayout && panelOpen ? "dialog" : undefined}
+          aria-modal={isMobileLayout && panelOpen ? true : undefined}
+          aria-hidden={!panelOpen ? true : undefined}
+          inert={!panelOpen ? true : undefined}
+          aria-labelledby="parameter-sheet-title"
+          tabIndex={isMobileLayout ? -1 : undefined}
+        >
           <div className="sheet-heading">
             <div>
               <span className="eyebrow">Parameter sheet</span>
-              <h2>{PANEL_LABELS[panelTab].full}</h2>
+              <h2 id="parameter-sheet-title">{PANEL_LABELS[panelTab].full}</h2>
             </div>
             <button
               className="sheet-close"
+              ref={parameterCloseRef}
               onClick={() => setPanelOpen(false)}
               type="button"
               aria-label="Close parameter sheet"
@@ -1237,97 +1421,122 @@ export default function Home() {
             </button>
           </div>
 
-          {panelTab === "specimen" ? (
-            <div className="specimen-sheet">
-              <div className="mesh-card">
-                <div className="mesh-miniature" aria-hidden="true">
-                  <i />
-                  <i />
-                  <i />
-                </div>
-                <div>
-                  <strong>Micro‑Benchy.sdf</strong>
-                  <span>Watertight · manifold · 1:1000</span>
-                </div>
-                <span className="ok-chip">ready</span>
-              </div>
-              <div className="transform-grid">
-                <label>
-                  Scale
-                  <strong>1.000</strong>
-                </label>
-                <label>
-                  Rotation Z
-                  <strong>0.0°</strong>
-                </label>
-                <label>
-                  Anchors
-                  <strong>auto / 3</strong>
-                </label>
-                <label>
-                  Clearance
-                  <strong>0.18 µm</strong>
-                </label>
-              </div>
-              <p className="sheet-note">
-                The ghost is geometry only. It is never used as a cured mask.
-              </p>
-            </div>
-          ) : (
-            <div className="parameter-list">
-              {PARAMETER_GROUPS[panelTab].map((definition) => (
-                <ParamRow
-                  key={definition.key}
-                  definition={definition}
-                  value={params[definition.key]}
-                  onChange={(value) => updateParam(definition.key, value)}
+          <div
+            className="mobile-parameter-tabs"
+            aria-label="Parameter groups"
+          >
+            {(Object.keys(PANEL_LABELS) as PanelTab[]).map((tab) => (
+              <button
+                key={tab}
+                className={panelTab === tab ? "active" : ""}
+                onClick={() => setPanelTab(tab)}
+                type="button"
+                aria-pressed={panelTab === tab}
+              >
+                <span aria-hidden="true">{PANEL_LABELS[tab].glyph}</span>
+                {PANEL_LABELS[tab].short}
+              </button>
+            ))}
+          </div>
+
+          <div className="mobile-presets" aria-label="Physics experiment presets">
+            <span className="eyebrow">Experiments</span>
+            <div>
+              {PRESETS.map((preset) => (
+                <button
+                  key={preset.key}
+                  onClick={() => applyPreset(preset.key)}
+                  type="button"
                   disabled={stage === "slicing"}
-                />
+                >
+                  {preset.label}
+                </button>
               ))}
             </div>
-          )}
+          </div>
 
-          {panelTab === "resin" && (
-            <div className="equation-card">
-              <div>
-                <span className="eyebrow">Executed model</span>
-                <span className="model-chip">reduced · deterministic</span>
+          <div className="parameter-sheet-body">
+            {panelTab === "specimen" ? (
+              <div className="specimen-sheet">
+                <div className="mesh-card">
+                  <div className="mesh-miniature" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                  </div>
+                  <div>
+                    <strong>Micro‑Benchy.sdf</strong>
+                    <span>Watertight · manifold · 1:1000</span>
+                  </div>
+                  <span className="ok-chip">ready</span>
+                </div>
+                <div className="transform-grid">
+                  <label>
+                    Scale
+                    <strong>1.000</strong>
+                  </label>
+                  <label>
+                    Rotation Z
+                    <strong>0.0°</strong>
+                  </label>
+                  <label>
+                    Anchors
+                    <strong>auto / 3</strong>
+                  </label>
+                  <label>
+                    Clearance
+                    <strong>0.18 µm</strong>
+                  </label>
+                </div>
+                <p className="sheet-note">
+                  The ghost is geometry only. It is never used as a cured mask.
+                </p>
               </div>
-              <code>∂ₜr = Dᵣ∇²r + ηsp − (δ + qo)r − κr²</code>
-              <code>∂ₜo = Dₒ∇²o − χqor</code>
-              <code>∂ₜx = γr(1 − x)</code>
-              <p>
-                Educational nondimensional preset. Comparative, not a calibrated
-                commercial resin prediction.
-              </p>
-            </div>
-          )}
+            ) : (
+              <div className="parameter-list">
+                {PARAMETER_GROUPS[panelTab].map((definition) => (
+                  <ParamRow
+                    key={definition.key}
+                    definition={definition}
+                    value={params[definition.key]}
+                    onChange={(value) => updateParam(definition.key, value)}
+                    disabled={stage === "slicing"}
+                  />
+                ))}
+              </div>
+            )}
+
+            {panelTab === "resin" && (
+              <div className="equation-card">
+                <div>
+                  <span className="eyebrow">Executed model</span>
+                  <span className="model-chip">reduced · deterministic</span>
+                </div>
+                <code>∂ₜr = Dᵣ∇²r + ηsp − (δ + qo)r − κr²</code>
+                <code>∂ₜo = Dₒ∇²o − χqor</code>
+                <code>∂ₜx = γr(1 − x)</code>
+                <p>
+                  Educational nondimensional preset. Comparative, not a calibrated
+                  commercial resin prediction.
+                </p>
+              </div>
+            )}
+          </div>
         </section>
       </aside>
 
       <div className="preset-rail" aria-label="Physics experiment presets">
         <span className="eyebrow">Experiments</span>
-        <button
-          onClick={() => applyPreset("wake")}
-          type="button"
-          disabled={stage === "slicing"}
-        >
-          Twice-written wake
-        </button>
-        <button
-          onClick={() => applyPreset("cliff")}
-          type="button"
-          disabled={stage === "slicing"}
-        >
-          Power cliff
-        </button>
-        <button
-          onClick={() => applyPreset("fine")}
-          type="button"
-          disabled={stage === "slicing"}
-        >
-          Fine roof
-        </button>
+        {PRESETS.map((preset) => (
+          <button
+            key={preset.key}
+            onClick={() => applyPreset(preset.key)}
+            type="button"
+            disabled={stage === "slicing"}
+          >
+            {preset.label}
+          </button>
+        ))}
       </div>
 
       {baseline && (
@@ -1443,6 +1652,29 @@ export default function Home() {
             <span className="phase-label expose-phase">EXPOSURE</span>
             <span className="phase-label develop-phase">DEVELOP</span>
           </div>
+        </div>
+      </section>
+
+      <section className="mobile-run-status glass-panel" aria-label="Simulation status">
+        <div>
+          <span className="mobile-stage-index" aria-hidden="true">
+            {String(activeProcess + 1).padStart(2, "0")}
+          </span>
+          <span>
+            <small>Current stage</small>
+            <strong>{stageLabel(stage, exposureProgress)}</strong>
+          </span>
+          <output>{Math.round(timelineProgress * 100)}%</output>
+        </div>
+        <div
+          className="mobile-run-progress"
+          role="progressbar"
+          aria-label="Simulation progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(timelineProgress * 100)}
+        >
+          <i style={{ width: `${timelineProgress * 100}%` }} />
         </div>
       </section>
 
