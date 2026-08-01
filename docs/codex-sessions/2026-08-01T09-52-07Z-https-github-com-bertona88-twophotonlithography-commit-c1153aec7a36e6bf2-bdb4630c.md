@@ -1,14 +1,14 @@
-# Review, repair, and deploy Two-Photon Lithography
+# [https://github.com/bertona88/twophotonlithography/commit/c1153aec7a36e6bf2bfbd6685ee361413a35fb4d](https://github.com/b
 
 ## Metadata
 
-- Captured at: `2026-08-01T12:27:14Z`
+- Captured at: `2026-08-01T12:42:10Z`
 - Session id: `019fbcbc-f502-7172-871d-f361bdb4630c`
 - Session started: `2026-08-01T09:52:07.964Z`
 - Source file: `rollout-2026-08-01T11-52-07-019fbcbc-f502-7172-871d-f361bdb4630c.jsonl`
-- Source SHA-256: `43108cab1c9e891e67d48cb0079b1b8cb8cd5c470de8391317ffe0bed7904325`
+- Source SHA-256: `f09be4f32ea92cac507bfc7d9fdf72aa7b59ae5c6d5b2486c57c383462dec58e`
 - Repository match: `yes`
-- Selection anchor: `codex-session-anchor: 20260801T122655Z-caf2f9c7`
+- Selection anchor: `codex-session-anchor: 20260801T124152Z-1eb0124e`
 - Anchor match: `yes`
 
 > Exported by the commit-chat-push skill. Developer/system instructions, encrypted reasoning, token counts, and oversized raw logs are intentionally omitted.
@@ -356,6 +356,66 @@ The CI failure is now explained: the generated Wasm embeds absolute Cargo regist
 
 ```text
 The path remap is working: rebuilding with a different Cargo home and a different checkout root now produces the identical Wasm SHA-256 `b6027272…`. I’ve regenerated the committed artifact from that canonical build and am running the full CI-equivalent suite once more before the follow-up commit.
+```
+
+### Assistant (commentary) - 2026-08-01T12:30:11.913Z
+
+```text
+The release itself is healthy; I’m finishing the follow-up that makes the pinned Wasm artifact reproducible across the dev box, GitHub Actions, and production. Independent review found no blocker, so I’m doing the final diff audit, then I’ll push and watch both CI and the exact production revision.
+```
+
+### Assistant (commentary) - 2026-08-01T12:30:36.471Z
+
+```text
+The reproducibility fix is now committed locally. It remaps only build-time source paths; the reviewed browser logic is unchanged, and the canonical Wasm hash is identical across independent checkout and Cargo roots. I’m pushing this final commit now.
+```
+
+### Assistant (commentary) - 2026-08-01T12:31:16.317Z
+
+```text
+Remote `main` now exactly matches `029db18f…`. GitHub CI is running, and the server’s normal deployment timer is being observed without forcing a restart, so the final result will reflect the real production path.
+```
+
+### Assistant (commentary) - 2026-08-01T12:32:51.218Z
+
+```text
+The production timer has picked up the new revision and the atomic deploy is now running. CI has cleared setup and is in the full test suite; its final pinned-artifact check is still pending, which is the specific gate this follow-up fixes.
+```
+
+### Assistant (commentary) - 2026-08-01T12:33:47.389Z
+
+```text
+GitHub CI is green, including the exact byte-for-byte Wasm regeneration gate that failed on the earlier commit. Production is still executing its own full Rust simulation suite before switching the live symlink; no failure is present.
+```
+
+### Assistant (commentary) - 2026-08-01T12:35:18.236Z
+
+```text
+The only remaining production gate is the deliberately heavy full-Benchy exposure test; the deploy log shows every preceding simulation, geometry, chemistry, and budget test passing. The current live revision remains untouched until that gate finishes.
+```
+
+### Assistant (commentary) - 2026-08-01T12:37:11.474Z
+
+```text
+The heavy production test passed, and the deploy has advanced into the pinned Wasm rebuild. This is the final build stage before the service smoke test and atomic release switch.
+```
+
+### Assistant (commentary) - 2026-08-01T12:38:59.335Z
+
+```text
+Production has switched atomically to exact commit `029db18f…`; both the revision marker and live symlink match, and the service is running with zero restarts. I’m now doing the public-origin asset comparison and HTTP checks before calling the deployment complete.
+```
+
+### Assistant (commentary) - 2026-08-01T12:41:13.173Z
+
+```text
+One cleanup item surfaced in GitHub’s otherwise-green run: the workflow still references the Node 20 generations of GitHub’s checkout/setup actions, which GitHub currently forces onto Node 24. I’m checking the official current action releases; if the upgrade is a tag-only compatibility change, I’ll remove that warning before closing.
+```
+
+### Assistant (commentary) - 2026-08-01T12:41:48.058Z
+
+```text
+The official current releases are `checkout@v7` and `setup-node@v7`, so I’ve made that two-line workflow upgrade. The commit-provenance workflow now requires me to refresh and re-scan the redacted session transcript before this final cleanup commit.
 ```
 
 ## Implementation Activity
@@ -1165,6 +1225,108 @@ The path remap is working: rebuilding with a different Cargo home and a differen
 ```
 
 ### Tool Call: wait_agent - 2026-08-01T12:26:20.456Z
+
+```json
+{"timeout_ms":20000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:28:01.500Z
+
+```json
+{"timeout_ms":20000}
+```
+
+### Tool Call: send_message - 2026-08-01T12:28:26.007Z
+
+```json
+{"target":"/root/repro_review","message":"[redacted encrypted agent payload]"}
+```
+
+### Tool Call: list_agents - 2026-08-01T12:30:43.497Z
+
+```json
+{}
+```
+
+### Tool Call: followup_task - 2026-08-01T12:30:48.217Z
+
+```json
+{"target":"/root/precommit_audit","message":"[redacted encrypted agent payload]"}
+```
+
+### Tool Call: followup_task - 2026-08-01T12:30:53.103Z
+
+```json
+{"target":"/root/production_preflight","message":"[redacted encrypted agent payload]"}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:31:16.539Z
+
+```json
+{"timeout_ms":30000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:32:01.652Z
+
+```json
+{"timeout_ms":35000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:32:52.055Z
+
+```json
+{"timeout_ms":40000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:33:47.542Z
+
+```json
+{"timeout_ms":45000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:34:19.715Z
+
+```json
+{"timeout_ms":45000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:35:18.754Z
+
+```json
+{"timeout_ms":45000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:36:15.377Z
+
+```json
+{"timeout_ms":45000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:37:11.579Z
+
+```json
+{"timeout_ms":40000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:38:07.830Z
+
+```json
+{"timeout_ms":30000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:39:36.571Z
+
+```json
+{"timeout_ms":30000}
+```
+
+### Tool Call: send_message - 2026-08-01T12:40:12.158Z
+
+```json
+{"target":"/root/production_preflight","message":"[redacted encrypted agent payload]"}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:40:29.653Z
 
 ```json
 {"timeout_ms":20000}
