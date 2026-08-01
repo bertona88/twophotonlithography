@@ -4,8 +4,15 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "${script_dir}/.." && pwd)"
 crate_root="${project_root}/rust/reaction-lens"
+cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
 mode="${1:-web}"
 required_wasm_pack="wasm-pack 0.13.1"
+
+# Rust panic locations from both this crate and registry dependencies are
+# retained in the optimized Wasm. Remap their machine-specific roots so the
+# reviewed browser artifact is reproducible on development, CI, and production
+# hosts that use different checkout paths or Cargo homes.
+export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=${project_root}=/workspace --remap-path-prefix=${cargo_home}=/cargo"
 
 command -v cargo >/dev/null || {
   echo "Rust/Cargo is required. Install the toolchain pinned by rust-toolchain.toml." >&2

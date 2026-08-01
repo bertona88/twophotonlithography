@@ -1,14 +1,14 @@
-# Review and repair Two-Photon Lithography
+# Review, repair, and deploy Two-Photon Lithography
 
 ## Metadata
 
-- Captured at: `2026-08-01T11:58:13Z`
+- Captured at: `2026-08-01T12:27:14Z`
 - Session id: `019fbcbc-f502-7172-871d-f361bdb4630c`
 - Session started: `2026-08-01T09:52:07.964Z`
 - Source file: `rollout-2026-08-01T11-52-07-019fbcbc-f502-7172-871d-f361bdb4630c.jsonl`
-- Source SHA-256: `7232430669b433d639f5068673089afb8a4281fc55c6fffc3c47826222e0d6f6`
+- Source SHA-256: `43108cab1c9e891e67d48cb0079b1b8cb8cd5c470de8391317ffe0bed7904325`
 - Repository match: `yes`
-- Selection anchor: `codex-session-anchor: 20260801T115757Z-bae2518f`
+- Selection anchor: `codex-session-anchor: 20260801T122655Z-caf2f9c7`
 - Anchor match: `yes`
 
 > Exported by the commit-chat-push skill. Developer/system instructions, encrypted reasoning, token counts, and oversized raw logs are intentionally omitted.
@@ -284,6 +284,78 @@ I’m using the `commit-chat-push` skill to preserve the implementation provenan
 
 ```text
 This repository is not hosted through OpenAI Sites; its checked-in production path is the existing atomic Hetzner deployment that polls `main`. I’m following that route and using the hosting skill’s exact-source/status-verification discipline, so production will only be accepted when its deployed marker matches the pushed SHA and the public apex/assets are healthy.
+```
+
+### Assistant (commentary) - 2026-08-01T12:00:33.864Z
+
+```text
+The transcript is exported and redacted, including removal of opaque encrypted agent payloads. I’m running one final full Linux suite against the exact commit candidate while two independent read-only checks audit the diff and confirm the current production baseline.
+```
+
+### Assistant (commentary) - 2026-08-01T12:05:19.342Z
+
+```text
+The exact staged snapshot is clean: full final Linux suite passed, generated Wasm matches the Linux rebuild byte-for-byte, origin has not advanced, and the independent audit found no blockers or private material. I’m committing this reviewed snapshot now, then I’ll push and follow the production timer until that exact SHA is live.
+```
+
+### Assistant (commentary) - 2026-08-01T12:06:02.104Z
+
+```text
+Commit `53dd0bf6c63c4007e5c79be6220331aa7b98b935` is now on `origin/main`. Production was healthy on the prior revision, so I’m letting the normal atomic deploy run instead of forcing a restart; I’ll keep polling until the deployed marker and current symlink both resolve to `53dd0bf…`.
+```
+
+### Assistant (commentary) - 2026-08-01T12:06:30.134Z
+
+```text
+The deployment runs on the shared Hetzner VPS, so I’m also applying the `hetzner-wofi-ops` skill for its guarded SSH wrapper and systemd/nginx polling conventions. This does not broaden scope—I’m only reading the Two-Photon deployment state unless the checked-in release workflow itself requires intervention.
+```
+
+### Assistant (commentary) - 2026-08-01T12:08:03.635Z
+
+```text
+The push landed just after the previous timer tick, so production is still correctly serving the old healthy release while waiting for the next poll. Nothing has failed or been restarted yet; I’m continuing through the next build/test cycle rather than forcing it.
+```
+
+### Assistant (commentary) - 2026-08-01T12:09:23.993Z
+
+```text
+Production has fetched `53dd0bf…` and is now running the server-side release gates. Install, JavaScript checks, Rust formatting, and Clippy are through; the 32-test Rust suite is in its long full-Benchy case. The old release remains live until every gate passes.
+```
+
+### Assistant (commentary) - 2026-08-01T12:11:33.695Z
+
+```text
+The long production test is healthy, not hung: it is actively using CPU, remains under the 3 GiB service limit, and the old public release is untouched. This host is slower than the dev box for the full-volume Benchy case, so I’m letting the validated test finish instead of weakening or bypassing the production gate.
+```
+
+### Assistant (commentary) - 2026-08-01T12:12:56.002Z
+
+```text
+Production has completed the atomic switch to `53dd0bf…`; the brief localhost refusal in the log was the expected startup race and the deploy script’s retry completed successfully. I’m now verifying the exact marker/symlink, service health, apex and `www`, and the public Wasm/client assets before calling it finished.
+```
+
+### Assistant (commentary) - 2026-08-01T12:14:24.445Z
+
+```text
+The exact SHA, atomic symlink, service, timer, apex, `www`, and all 21 public generated assets—including the Wasm module—now match production. I’m using the in-app browser skill for one final live-domain smoke so the release is also proven to initialize Rust/Wasm and slice the specimen in a real browser, not only over HTTP.
+```
+
+### Assistant (commentary) - 2026-08-01T12:15:50.573Z
+
+```text
+The public deployment is healthy and the live browser smoke passed, but GitHub’s independent CI check is red. I’m inspecting that failure before closing—production itself passed the same application suite, so this is likely a CI-only gate or environment mismatch, but I won’t leave the pushed branch red without resolving the exact cause.
+```
+
+### Assistant (commentary) - 2026-08-01T12:20:03.339Z
+
+```text
+The CI failure is now explained: the generated Wasm embeds absolute Cargo registry paths (`/home/andrea/.cargo`, `/root/.cargo`, or `/home/runner/.cargo`), so identical source/toolchain builds differ across machines even though all functional tests pass. I’m fixing the build to remap both repository and Cargo paths to stable virtual prefixes, then I’ll prove cross-path reproducibility before a small follow-up commit and redeploy.
+```
+
+### Assistant (commentary) - 2026-08-01T12:23:31.556Z
+
+```text
+The path remap is working: rebuilding with a different Cargo home and a different checkout root now produces the identical Wasm SHA-256 `b6027272…`. I’ve regenerated the committed artifact from that canonical build and am running the full CI-equivalent suite once more before the follow-up commit.
 ```
 
 ## Implementation Activity
@@ -916,4 +988,184 @@ This repository is not hosted through OpenAI Sites; its checked-in production pa
 
 ```json
 {"cell_id":"158","yield_time_ms":30000,"max_tokens":20000}
+```
+
+### Tool Call: spawn_agent - 2026-08-01T12:00:07.595Z
+
+```json
+{"task_name":"precommit_audit","fork_turns":"all","message":"[redacted encrypted agent payload]"}
+```
+
+### Tool Call: spawn_agent - 2026-08-01T12:00:13.688Z
+
+```json
+{"task_name":"production_preflight","fork_turns":"all","message":"[redacted encrypted agent payload]"}
+```
+
+### Tool Call: wait - 2026-08-01T12:01:14.778Z
+
+```json
+{"cell_id":"246","yield_time_ms":30000,"max_tokens":20000}
+```
+
+### Tool Call: wait - 2026-08-01T12:01:52.496Z
+
+```json
+{"cell_id":"247","yield_time_ms":30000,"max_tokens":20000}
+```
+
+### Tool Call: wait - 2026-08-01T12:02:26.153Z
+
+```json
+{"cell_id":"248","yield_time_ms":30000,"max_tokens":20000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:02:44.913Z
+
+```json
+{"timeout_ms":1000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:02:47.516Z
+
+```json
+{"timeout_ms":10000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:03:42.354Z
+
+```json
+{"timeout_ms":10000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:04:25.241Z
+
+```json
+{"timeout_ms":20000}
+```
+
+### Tool Call: send_message - 2026-08-01T12:04:48.287Z
+
+```json
+{"target":"/root/precommit_audit","message":"[redacted encrypted agent payload]"}
+```
+
+### Tool Call: list_agents - 2026-08-01T12:04:52.005Z
+
+```json
+{}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:04:55.914Z
+
+```json
+{"timeout_ms":20000}
+```
+
+### Tool Call: followup_task - 2026-08-01T12:05:56.774Z
+
+```json
+{"target":"/root/production_preflight","message":"[redacted encrypted agent payload]"}
+```
+
+### Tool Call: wait - 2026-08-01T12:07:19.398Z
+
+```json
+{"cell_id":"262","yield_time_ms":30000,"max_tokens":6000}
+```
+
+### Tool Call: wait - 2026-08-01T12:07:54.936Z
+
+```json
+{"cell_id":"263","yield_time_ms":30000,"max_tokens":6000}
+```
+
+### Tool Call: wait - 2026-08-01T12:08:39.937Z
+
+```json
+{"cell_id":"265","yield_time_ms":30000,"max_tokens":6000}
+```
+
+### Tool Call: wait - 2026-08-01T12:09:12.943Z
+
+```json
+{"cell_id":"266","yield_time_ms":30000,"max_tokens":6000}
+```
+
+### Tool Call: wait - 2026-08-01T12:09:41.941Z
+
+```json
+{"cell_id":"268","yield_time_ms":30000,"max_tokens":6000}
+```
+
+### Tool Call: wait - 2026-08-01T12:10:15.760Z
+
+```json
+{"cell_id":"269","yield_time_ms":30000,"max_tokens":6000}
+```
+
+### Tool Call: wait - 2026-08-01T12:10:44.041Z
+
+```json
+{"cell_id":"271","yield_time_ms":30000,"max_tokens":6000}
+```
+
+### Tool Call: wait - 2026-08-01T12:11:50.433Z
+
+```json
+{"cell_id":"275","yield_time_ms":30000,"max_tokens":6000}
+```
+
+### Tool Call: wait - 2026-08-01T12:20:42.187Z
+
+```json
+{"cell_id":"308","yield_time_ms":30000,"max_tokens":10000}
+```
+
+### Tool Call: wait - 2026-08-01T12:21:36.351Z
+
+```json
+{"cell_id":"310","yield_time_ms":30000,"max_tokens":12000}
+```
+
+### Tool Call: wait - 2026-08-01T12:22:33.112Z
+
+```json
+{"cell_id":"312","yield_time_ms":30000,"max_tokens":12000}
+```
+
+### Tool Call: spawn_agent - 2026-08-01T12:23:18.771Z
+
+```json
+{"task_name":"repro_review","fork_turns":"all","message":"[redacted encrypted agent payload]"}
+```
+
+### Tool Call: wait - 2026-08-01T12:23:48.258Z
+
+```json
+{"cell_id":"316","yield_time_ms":30000,"max_tokens":20000}
+```
+
+### Tool Call: wait - 2026-08-01T12:24:26.002Z
+
+```json
+{"cell_id":"317","yield_time_ms":30000,"max_tokens":20000}
+```
+
+### Tool Call: wait - 2026-08-01T12:25:01.891Z
+
+```json
+{"cell_id":"318","yield_time_ms":30000,"max_tokens":20000}
+```
+
+### Tool Call: wait - 2026-08-01T12:25:31.288Z
+
+```json
+{"cell_id":"319","yield_time_ms":30000,"max_tokens":20000}
+```
+
+### Tool Call: wait_agent - 2026-08-01T12:26:20.456Z
+
+```json
+{"timeout_ms":20000}
 ```
