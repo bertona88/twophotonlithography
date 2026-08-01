@@ -7,6 +7,7 @@
 
 mod parameters;
 mod simulation;
+mod whole_volume;
 
 pub use parameters::{Parameters, SimulationConfig, ValidationError};
 pub use simulation::{
@@ -14,9 +15,12 @@ pub use simulation::{
     GRID_LEN, GRID_WIDTH, LENS_HEIGHT_UM, LENS_WIDTH_UM, SNAPSHOT_FIELD_COUNT,
     SNAPSHOT_FIELD_ORDER,
 };
+pub use whole_volume::{
+    VolumeDiagnostics, WholeVolumeConfig, WholeVolumeSimulation as WholeVolumeCore,
+};
 
 #[cfg(target_arch = "wasm32")]
 mod wasm_api;
 
 #[cfg(target_arch = "wasm32")]
-pub use wasm_api::{create_simulation, ReactionLensSimulation};
+pub use wasm_api::{create_simulation, ReactionLensSimulation, WholeVolumeSimulation};

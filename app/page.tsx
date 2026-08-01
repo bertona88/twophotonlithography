@@ -84,6 +84,23 @@ type SolverDiagnostics = {
   simulatedModelTime: number;
   wasmMemoryBytes: number;
   checksum: string;
+  volume?: {
+    solver: string;
+    qualityTier: string;
+    gridWidth: number;
+    gridHeight: number;
+    gridDepth: number;
+    voxelPitchUm: [number, number, number];
+    memoryBudgetBytes: number;
+    ownedMemoryBytes: number;
+    downgradeReason?: string;
+    psfModel: string;
+    psfPupilSamples: number;
+    psfKernelVoxels: number;
+    scanPoints: number;
+    simulatedTimeSeconds: number;
+    checksum: string;
+  };
 };
 
 type SliceInfo = {
@@ -671,16 +688,38 @@ function ReactionLens({
       </div>
       <div className="lens-diagnostics" aria-label="Solver diagnostics">
         <span>
-          <strong>{diagnostics.solver}</strong>
-          {diagnostics.gridWidth}×{diagnostics.gridHeight}
+          <strong>{diagnostics.volume?.solver ?? diagnostics.solver}</strong>
+          {diagnostics.volume
+            ? `${diagnostics.volume.gridWidth}×${diagnostics.volume.gridHeight}×${diagnostics.volume.gridDepth}`
+            : `${diagnostics.gridWidth}×${diagnostics.gridHeight}`}
         </span>
         <span>
-          <strong>Δt {diagnostics.timestepModel.toFixed(3)} T₀</strong>
-          {diagnostics.updatesPerSecond.toFixed(0)} updates/s
+          <strong>{diagnostics.volume?.qualityTier ?? "lens"} tier</strong>
+          {diagnostics.volume
+            ? diagnostics.volume.voxelPitchUm
+                .map((value) => value.toFixed(3))
+                .join("×") + " µm"
+            : `Δt ${diagnostics.timestepModel.toFixed(3)} T₀`}
         </span>
         <span>
-          <strong>t {diagnostics.simulatedModelTime.toFixed(2)} T₀</strong>
-          {formatMemory(diagnostics.wasmMemoryBytes)}
+          <strong>
+            {diagnostics.volume
+              ? `${diagnostics.volume.psfPupilSamples} pupil rays`
+              : `t ${diagnostics.simulatedModelTime.toFixed(2)} T₀`}
+          </strong>
+          {diagnostics.volume
+            ? `${diagnostics.volume.psfKernelVoxels} PSF voxels`
+            : formatMemory(diagnostics.wasmMemoryBytes)}
+        </span>
+        <span title={diagnostics.volume?.downgradeReason}>
+          <strong>
+            {formatMemory(
+              diagnostics.volume?.ownedMemoryBytes ?? diagnostics.wasmMemoryBytes,
+            )}
+          </strong>
+          {diagnostics.volume
+            ? `of ${formatMemory(diagnostics.volume.memoryBudgetBytes)} budget`
+            : `${diagnostics.updatesPerSecond.toFixed(0)} updates/s`}
         </span>
       </div>
     </section>
@@ -1194,7 +1233,7 @@ export default function Home() {
     const file = event.dataTransfer.files[0];
     if (!file) return;
     setNotice(
-      `${file.name} is staged for mesh voxelization. This causal run remains locked to the bundled Micro‑Benchy SDF.`,
+      `${file.name} is staged for mesh voxelization. This run uses the bundled official 3DBenchy occupancy until import is implemented.`,
     );
   };
 
@@ -1226,6 +1265,9 @@ export default function Home() {
         )}
         selectedLayer={selectedLayer}
         layerHeight={params.layerHeight}
+        voxelPitch={
+          displaySolverDiagnostics.volume?.voxelPitchUm ?? [0.18, 0.17, 0.18]
+        }
         fieldMode={fieldMode}
         stage={stage}
       />
@@ -1279,11 +1321,11 @@ export default function Home() {
 
       <section className="specimen-tag glass-panel" aria-label="Specimen details">
         <div className="eyebrow-row">
-          <span className="eyebrow">Target / CC0 benchmark</span>
+          <span className="eyebrow">Target / official benchmark mesh</span>
           <span className="target-badge">TARGET</span>
         </div>
         <h1>Micro‑Benchy</h1>
-        <p>21.6 × 8.7 × 12.7 µm · analytic SDF</p>
+        <p>22.0 × 11.4 × 17.6 µm · CreativeTools 3DBenchy</p>
         <div className="specimen-meta">
           <span>
             <i className="violet" /> focus PSF
@@ -1465,8 +1507,8 @@ export default function Home() {
                     <i />
                   </div>
                   <div>
-                    <strong>Micro‑Benchy.sdf</strong>
-                    <span>Watertight · manifold · 1:1000</span>
+                    <strong>3DBenchy.stl</strong>
+                    <span>Official mesh · 225,706 triangles</span>
                   </div>
                   <span className="ok-chip">ready</span>
                 </div>
@@ -1489,7 +1531,8 @@ export default function Home() {
                   </label>
                 </div>
                 <p className="sheet-note">
-                  The ghost is geometry only. It is never used as a cured mask.
+                  The mesh is voxelized once. Rust scans that occupancy through a
+                  dense three-dimensional resin field; rendering never mutates it.
                 </p>
               </div>
             ) : (
@@ -1510,14 +1553,16 @@ export default function Home() {
               <div className="equation-card">
                 <div>
                   <span className="eyebrow">Executed model</span>
-                  <span className="model-chip">reduced · deterministic</span>
+                  <span className="model-chip">3D · deterministic</span>
                 </div>
+                <code>|E|² = Debye(NA, λ, circular polarization)</code>
+                <code>dose ∝ |E|⁴ · P² / (f · τ)</code>
                 <code>∂ₜr = Dᵣ∇²r + ηsp − (δ + qo)r − κr²</code>
                 <code>∂ₜo = Dₒ∇²o − χqor</code>
                 <code>∂ₜx = γr(1 − x)</code>
                 <p>
-                  Educational nondimensional preset. Comparative, not a calibrated
-                  commercial resin prediction.
+                  The full volume, exposure, threshold conversion, oxygen
+                  inhibition, and development state are owned by Rust/Wasm.
                 </p>
               </div>
             )}
@@ -1740,7 +1785,7 @@ export default function Home() {
           <div>
             <span className="drop-icon">↓</span>
             <strong>Drop mesh into the chamber</strong>
-            <p>STL preview is accepted; the causal run remains on Micro‑Benchy.</p>
+            <p>STL preview is accepted; this run remains on official 3DBenchy.</p>
           </div>
         </div>
       )}

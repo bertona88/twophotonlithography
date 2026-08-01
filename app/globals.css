@@ -724,7 +724,7 @@ input:focus-visible {
 
 .lens-diagnostics {
   display: grid;
-  grid-template-columns: 1.05fr 1fr 1fr;
+  grid-template-columns: 1.12fr repeat(3, 1fr);
   padding: 7px 10px 9px;
   border-top: 1px solid rgba(132, 148, 188, 0.08);
   gap: 7px;

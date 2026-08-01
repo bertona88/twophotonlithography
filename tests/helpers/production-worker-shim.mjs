@@ -22,11 +22,13 @@ globalThis.fetch = async (input, init) => {
         ? input.pathname
         : input.url;
 
-  if (requestUrl.startsWith("/assets/")) {
+  if (requestUrl.startsWith("/assets/") || requestUrl.startsWith("/benchy/")) {
     if (workerData.wasmFailure === "invalid") {
-      return new Response(new Uint8Array([0, 1, 2, 3]), {
-        headers: { "Content-Type": "application/wasm" },
-      });
+      if (requestUrl.startsWith("/assets/")) {
+        return new Response(new Uint8Array([0, 1, 2, 3]), {
+          headers: { "Content-Type": "application/wasm" },
+        });
+      }
     }
     const assetPath = path.join(workerData.clientRoot, requestUrl.slice(1));
     const bytes = await readFile(assetPath);

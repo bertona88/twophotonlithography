@@ -1,5 +1,6 @@
 import initReactionLens, {
   ReactionLensSimulation,
+  WholeVolumeSimulation,
 } from "./wasm/reaction_lens/reaction_lens.js";
 import reactionLensWasmUrl from "./wasm/reaction_lens/reaction_lens_bg.wasm?url";
 
@@ -60,7 +61,6 @@ const GRID_H = 68;
 const GRID_N = GRID_W * GRID_H;
 const SNAPSHOT_FIELD_COUNT = 6;
 const SNAPSHOT_LEN = GRID_N * SNAPSHOT_FIELD_COUNT;
-const LENS_W_UM = 15;
 const DT_MODEL = 0.016;
 const SEED = 0x07a1;
 const MAX_PENDING_MESSAGES = 64;
@@ -96,6 +96,28 @@ type RustDiagnostics = {
   ownedMemoryBytes: number;
 };
 
+type VolumeDiagnostics = {
+  solver: string;
+  qualityTier: string;
+  gridWidth: number;
+  gridHeight: number;
+  gridDepth: number;
+  voxelPitchUm: [number, number, number];
+  memoryBudgetBytes: number;
+  ownedMemoryBytes: number;
+  downgradeReason?: string;
+  psfModel: string;
+  psfPupilSamples: number;
+  psfKernelVoxels: number;
+  scanPoints: number;
+  exposureStep: number;
+  exposureStepsTotal: number;
+  developmentStep: number;
+  developmentStepsTotal: number;
+  simulatedTimeSeconds: number;
+  checksum: string;
+};
+
 let params: ModelParams;
 let stage: LabStage = "model";
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -106,6 +128,8 @@ let developmentStep = 0;
 let developmentStepsTotal = 1;
 let pathLength = 0;
 let lensSimulation: ReactionLensSimulation | null = null;
+let volumeSimulation: WholeVolumeSimulation | null = null;
+let benchyOccupancy: Uint8Array | null = null;
 let wasmMemory: WebAssembly.Memory | null = null;
 let solverState: SolverState = "initializing";
 let solverInitializationError: string | null = null;
@@ -116,18 +140,10 @@ let updatesPerSecond = 0;
 
 let linePositions = new Float32Array(0);
 let macroPositions = new Float32Array(0);
-let macroP = new Float32Array(0);
-let macroO = new Float32Array(0);
-let macroR = new Float32Array(0);
-let macroX = new Float32Array(0);
-let macroMass = new Float32Array(0);
-let macroDeveloper = new Float32Array(0);
-let macroScratchP = new Float32Array(0);
-let macroScratchO = new Float32Array(0);
-let macroScratchR = new Float32Array(0);
-let macroScratchX = new Float32Array(0);
-let macroScratchDeveloper = new Float32Array(0);
-let macroScratchMass = new Float32Array(0);
+let volumeConversion = new Uint8Array(0);
+let volumeOxygen = new Uint8Array(0);
+let volumeRadicals = new Uint8Array(0);
+let volumeRemaining = new Uint8Array(0);
 
 function clamp(value: number, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value));
@@ -186,8 +202,42 @@ function requireLensSimulation() {
   return lensSimulation;
 }
 
+function requireVolumeSimulation() {
+  if (!volumeSimulation) {
+    throw new Error("Rust/Wasm 3D volume has not been configured");
+  }
+  return volumeSimulation;
+}
+
+function memoryBudgetBytes() {
+  const deviceMemory = (navigator as Navigator & { deviceMemory?: number })
+    .deviceMemory;
+  const conservativeMegabytes = Number.isFinite(deviceMemory)
+    ? Math.max(8, Math.min(64, (deviceMemory ?? 1) * 12))
+    : 32;
+  return Math.floor(conservativeMegabytes * 1024 * 1024);
+}
+
+function configureVolume(next: ModelParams) {
+  if (volumeSimulation) {
+    volumeSimulation.set_parameters(next);
+    return;
+  }
+  if (!benchyOccupancy) {
+    throw new Error("The official 3DBenchy occupancy asset is unavailable");
+  }
+  volumeSimulation = new WholeVolumeSimulation(
+    {
+      parameters: next,
+      memoryBudgetBytes: memoryBudgetBytes(),
+    },
+    benchyOccupancy,
+  );
+}
+
 function applyLensParameters(next: ModelParams) {
   validateWorkerParameters(next);
+  configureVolume(next);
   if (lensSimulation) {
     lensSimulation.set_parameters(next);
     return;
@@ -583,156 +633,29 @@ function sliceBenchy(next: ModelParams) {
 }
 
 function resetFields() {
-  const count = Math.floor(macroPositions.length / 3);
-  macroP = new Float32Array(count).fill(params?.initiator ?? 1);
-  macroO = new Float32Array(count).fill(params?.oxygen ?? 1);
-  macroR = new Float32Array(count);
-  macroX = new Float32Array(count);
-  macroMass = new Float32Array(count).fill(1);
-  macroDeveloper = new Float32Array(count);
-  macroScratchP = new Float32Array(count);
-  macroScratchO = new Float32Array(count);
-  macroScratchR = new Float32Array(count);
-  macroScratchX = new Float32Array(count);
-  macroScratchDeveloper = new Float32Array(count);
-  macroScratchMass = new Float32Array(count).fill(1);
-
+  const volume = requireVolumeSimulation();
+  volume.reset();
+  const volumeDiagnostics = volume.get_diagnostics() as VolumeDiagnostics;
   exposureStep = 0;
   developmentStep = 0;
-  exposureStepsTotal = Math.max(
-    420,
-    Math.min(
-      7200,
-      Math.floor(count * Math.max(1, params?.passes ?? 1) * 0.72),
-    ),
-  );
-  developmentStepsTotal = 210;
+  exposureStepsTotal = volumeDiagnostics.exposureStepsTotal;
+  developmentStepsTotal = volumeDiagnostics.developmentStepsTotal;
   const simulation = requireLensSimulation();
   simulation.set_exposure_steps_total(exposureStepsTotal);
   simulation.reset(SEED);
+  readVolumeSnapshot(true);
   resetUpdateRate();
 }
 
-function stepMacro(progress: number) {
-  const count = macroX.length;
-  if (count === 0) return;
-  const focusFloat = progress * Math.max(0, count * params.passes - 1);
-  const focusIndex = Math.floor(focusFloat % count);
-  const fx = macroPositions[focusIndex * 3];
-  const fy = macroPositions[focusIndex * 3 + 1];
-  const fz = macroPositions[focusIndex * 3 + 2];
-  const pathSamplingStride = Math.max(
-    1,
-    (count * params.passes) / Math.max(1, exposureStepsTotal),
-  );
-  const sourceScale =
-    3.6 *
-    Math.pow(params.power / 16, 2) *
-    (80 / params.repetitionRate) *
-    (100 / params.pulseDuration) *
-    (45 / params.speed) *
-    pathSamplingStride;
-  const activeIndexRadius = Math.min(
-    Math.floor(count / 2),
-    Math.ceil(28 * pathSamplingStride),
-  );
-
-  for (let index = 0; index < count; index += 1) {
-    const offset = index * 3;
-    const directIndexDistance = Math.abs(index - focusIndex);
-    const wrappedIndexDistance = Math.min(
-      directIndexDistance,
-      count - directIndexDistance,
-    );
-    let source = 0;
-    if (wrappedIndexDistance <= activeIndexRadius) {
-      const dx = macroPositions[offset] - fx;
-      const dy = macroPositions[offset + 1] - fy;
-      const dz = macroPositions[offset + 2] - fz;
-      const distanceSquared = dx * dx + dy * dy + dz * dz * 0.18;
-      source = sourceScale * Math.exp(-distanceSquared / 0.19);
-    }
-    const previous = Math.max(0, index - 1);
-    const next = Math.min(count - 1, index + 1);
-    const previousDistance = distance3(
-      macroPositions[offset],
-      macroPositions[offset + 1],
-      macroPositions[offset + 2],
-      macroPositions[previous * 3],
-      macroPositions[previous * 3 + 1],
-      macroPositions[previous * 3 + 2],
-    );
-    const nextDistance = distance3(
-      macroPositions[offset],
-      macroPositions[offset + 1],
-      macroPositions[offset + 2],
-      macroPositions[next * 3],
-      macroPositions[next * 3 + 1],
-      macroPositions[next * 3 + 2],
-    );
-    const connectedPrevious = previousDistance < 0.9 ? previous : index;
-    const connectedNext = nextDistance < 0.9 ? next : index;
-    const lapP =
-      macroP[connectedPrevious] + macroP[connectedNext] - 2 * macroP[index];
-    const lapO =
-      macroO[connectedPrevious] + macroO[connectedNext] - 2 * macroO[index];
-    const lapR =
-      macroR[connectedPrevious] + macroR[connectedNext] - 2 * macroR[index];
-    const radicalLoss =
-      (params.darkLoss + params.oxygenQuench * macroO[index]) * macroR[index] +
-      params.termination * macroR[index] * macroR[index];
-
-    macroScratchP[index] = clamp(
-      macroP[index] +
-        DT_MODEL *
-          (params.piDiffusion * lapP -
-            params.piDepletion * source * macroP[index]),
-      0,
-      params.initiator,
-    );
-    macroScratchR[index] = clamp(
-      macroR[index] +
-        DT_MODEL *
-          (params.radicalDiffusion * lapR +
-            params.radicalYield * source * macroP[index] -
-            radicalLoss),
-      0,
-      8,
-    );
-    macroScratchO[index] = clamp(
-      macroO[index] +
-        DT_MODEL *
-          (params.oxygenDiffusion * lapO +
-            params.oxygenDiffusion * 0.012 * (params.oxygen - macroO[index]) -
-            0.2 * params.oxygenQuench * macroO[index] * macroR[index]),
-      0,
-      params.oxygen,
-    );
-    macroScratchX[index] = clamp(
-      macroX[index] +
-        DT_MODEL * params.propagation * macroR[index] * (1 - macroX[index]),
-    );
-  }
-
-  [macroP, macroScratchP] = [macroScratchP, macroP];
-  [macroO, macroScratchO] = [macroScratchO, macroO];
-  [macroR, macroScratchR] = [macroScratchR, macroR];
-  [macroX, macroScratchX] = [macroScratchX, macroX];
-}
-
 function runExposureBatch() {
-  const batch = 34;
+  const batch = 6;
   const requestedSteps = Math.max(
     0,
     Math.min(batch, exposureStepsTotal - exposureStep),
   );
   const advancedSteps =
-    requireLensSimulation().advance_exposure_steps(requestedSteps);
-  for (let step = 0; step < advancedSteps; step += 1) {
-    const progress =
-      (exposureStep + step) / Math.max(1, exposureStepsTotal - 1);
-    stepMacro(progress);
-  }
+    requireVolumeSimulation().advance_exposure_steps(requestedSteps);
+  requireLensSimulation().advance_exposure_steps(advancedSteps);
   exposureStep += advancedSteps;
   recordSimulationUpdates(advancedSteps);
 
@@ -744,75 +667,15 @@ function runExposureBatch() {
 }
 
 function runDevelopmentBatch() {
-  const batch = 6;
-  const dtDevelopment =
-    params.developmentTime / Math.max(1, developmentStepsTotal);
+  const batch = 4;
   const requestedSteps = Math.min(
     batch,
     Math.max(0, developmentStepsTotal - developmentStep),
   );
   const advancedSteps =
-    requireLensSimulation().advance_development_steps(requestedSteps);
-  for (let step = 0; step < advancedSteps; step += 1) {
-    for (let index = 0; index < macroMass.length; index += 1) {
-      const offset = index * 3;
-      const previous = Math.max(0, index - 1);
-      const next = Math.min(macroMass.length - 1, index + 1);
-      const previousDistance = distance3(
-        macroPositions[offset],
-        macroPositions[offset + 1],
-        macroPositions[offset + 2],
-        macroPositions[previous * 3],
-        macroPositions[previous * 3 + 1],
-        macroPositions[previous * 3 + 2],
-      );
-      const nextDistance = distance3(
-        macroPositions[offset],
-        macroPositions[offset + 1],
-        macroPositions[offset + 2],
-        macroPositions[next * 3],
-        macroPositions[next * 3 + 1],
-        macroPositions[next * 3 + 2],
-      );
-      const connectedPrevious = previousDistance < 0.9 ? previous : index;
-      const connectedNext = nextDistance < 0.9 ? next : index;
-      const lapDeveloper =
-        (macroDeveloper[connectedPrevious] +
-          macroDeveloper[connectedNext] -
-          2 * macroDeveloper[index]) /
-        (0.55 * 0.55);
-      const gel = Math.pow(
-        clamp((macroX[index] - params.gelPoint) / (1 - params.gelPoint)),
-        0.7,
-      );
-      const diffusivity =
-        0.014 + 0.08 * (1 - macroMass[index]) + 0.02 * Math.exp(-3 * gel);
-      macroScratchDeveloper[index] = clamp(
-        macroDeveloper[index] + dtDevelopment * diffusivity * lapDeveloper,
-      );
-      macroScratchMass[index] = clamp(
-        macroMass[index] -
-          dtDevelopment *
-            params.developerRate *
-            Math.exp(-params.developerResistance * gel) *
-            macroDeveloper[index] *
-            macroMass[index],
-      );
-
-      const px = macroPositions[offset];
-      const py = macroPositions[offset + 1];
-      const pz = macroPositions[offset + 2];
-      const touchesBath =
-        Math.abs(py) > 3.2 || px < -9.2 || px > 9.2 || pz < 0.6 || pz > 12;
-      if (touchesBath) macroScratchDeveloper[index] = 1;
-    }
-    [macroDeveloper, macroScratchDeveloper] = [
-      macroScratchDeveloper,
-      macroDeveloper,
-    ];
-    [macroMass, macroScratchMass] = [macroScratchMass, macroMass];
-    developmentStep += 1;
-  }
+    requireVolumeSimulation().advance_development_steps(requestedSteps);
+  requireLensSimulation().advance_development_steps(advancedSteps);
+  developmentStep += advancedSteps;
   recordSimulationUpdates(advancedSteps);
 
   if (developmentStep >= developmentStepsTotal) {
@@ -943,47 +806,85 @@ function readLensSnapshot() {
   };
 }
 
-function emitSnapshot() {
-  const { lens, diagnostics, lensStatistics } = readLensSnapshot();
-  const oxygenScale = Math.max(1e-6, params.oxygen);
-
-  const conversion = new Uint8Array(macroX.length);
-  const oxygen = new Uint8Array(macroO.length);
-  const radicals = new Uint8Array(macroR.length);
-  const remaining = new Uint8Array(macroMass.length);
-  for (let index = 0; index < macroX.length; index += 1) {
-    conversion[index] = Math.round(clamp(macroX[index]) * 255);
-    oxygen[index] = Math.round(clamp(macroO[index] / oxygenScale) * 255);
-    radicals[index] = Math.round(
-      clamp(Math.log1p(macroR[index]) / Math.log(5)) * 255,
-    );
-    remaining[index] = Math.round(clamp(macroMass[index]) * 255);
+function readVolumeSnapshot(rebuildPath = false) {
+  const volume = requireVolumeSimulation();
+  if (!wasmMemory) {
+    throw new Error("Rust/Wasm memory is unavailable");
+  }
+  const pointer = volume.get_snapshot();
+  const snapshotLength = volume.snapshot_len();
+  if (snapshotLength % 7 !== 0) {
+    throw new Error("Rust/Wasm 3D snapshot does not use the seven-field contract");
+  }
+  const memoryBuffer = wasmMemory.buffer;
+  if (pointer + snapshotLength * 4 > memoryBuffer.byteLength) {
+    throw new Error("Rust/Wasm 3D snapshot points outside linear memory");
+  }
+  const packed = new Float32Array(memoryBuffer, pointer, snapshotLength);
+  const count = snapshotLength / 7;
+  macroPositions = new Float32Array(count * 3);
+  volumeConversion = new Uint8Array(count);
+  volumeOxygen = new Uint8Array(count);
+  volumeRadicals = new Uint8Array(count);
+  volumeRemaining = new Uint8Array(count);
+  for (let index = 0; index < count; index += 1) {
+    const source = index * 7;
+    const target = index * 3;
+    macroPositions[target] = packed[source];
+    macroPositions[target + 1] = packed[source + 1];
+    macroPositions[target + 2] = packed[source + 2];
+    volumeConversion[index] = Math.round(clamp(packed[source + 3]) * 255);
+    volumeOxygen[index] = Math.round(clamp(packed[source + 4]) * 255);
+    volumeRadicals[index] = Math.round(clamp(packed[source + 5]) * 255);
+    volumeRemaining[index] = Math.round(clamp(packed[source + 6]) * 255);
   }
 
-  const exposureProgress = clamp(exposureStep / exposureStepsTotal);
-  const developmentProgress = clamp(developmentStep / developmentStepsTotal);
-  const focusIndex =
-    macroX.length > 0
-      ? Math.min(
-          macroX.length - 1,
-          Math.floor(
-            ((exposureProgress * macroX.length * params.passes) % macroX.length) ||
-              0,
-          ),
-        )
-      : 0;
-  const focus = macroX.length
-    ? [
-        macroPositions[focusIndex * 3],
-        macroPositions[focusIndex * 3 + 1],
-        macroPositions[focusIndex * 3 + 2],
-      ]
-    : [0, 0, 7];
+  const diagnostics = volume.get_diagnostics() as VolumeDiagnostics;
+  if (rebuildPath) {
+    const lines: number[] = [];
+    const stride = Math.max(1, Math.ceil(count / 14_000));
+    for (let index = stride; index < count; index += stride) {
+      const previous = (index - stride) * 3;
+      const current = index * 3;
+      const distance = distance3(
+        macroPositions[previous],
+        macroPositions[previous + 1],
+        macroPositions[previous + 2],
+        macroPositions[current],
+        macroPositions[current + 1],
+        macroPositions[current + 2],
+      );
+      if (distance <= Math.max(...diagnostics.voxelPitchUm) * (stride + 1) * 2.2) {
+        lines.push(
+          macroPositions[previous],
+          macroPositions[previous + 1],
+          macroPositions[previous + 2],
+          macroPositions[current],
+          macroPositions[current + 1],
+          macroPositions[current + 2],
+        );
+      }
+    }
+    linePositions = new Float32Array(lines);
+    pathLength =
+      diagnostics.scanPoints * Math.min(...diagnostics.voxelPitchUm);
+  }
+  return diagnostics;
+}
+
+function emitSnapshot() {
+  const { lens, diagnostics, lensStatistics } = readLensSnapshot();
+  const volumeDiagnostics = readVolumeSnapshot();
+  const conversion = volumeConversion.slice();
+  const oxygen = volumeOxygen.slice();
+  const radicals = volumeRadicals.slice();
+  const remaining = volumeRemaining.slice();
+  const exposureProgress = requireVolumeSimulation().exposure_progress();
+  const developmentProgress = requireVolumeSimulation().development_progress();
+  const focus = Array.from(requireVolumeSimulation().focus());
 
   const pulseEnergyPj =
     (params.power * 1e-3) / (params.repetitionRate * 1e6) / 1e-12;
-  const physicalExposureSeconds =
-    (pathLength * params.passes) / Math.max(1, params.speed);
 
   post(
     {
@@ -992,7 +893,7 @@ function emitSnapshot() {
       stage,
       exposureProgress,
       developmentProgress,
-      simulatedSeconds: exposureProgress * physicalExposureSeconds,
+      simulatedSeconds: volumeDiagnostics.simulatedTimeSeconds,
       focus,
       lens: lens.buffer,
       lensWidth: GRID_W,
@@ -1001,14 +902,23 @@ function emitSnapshot() {
       oxygen: oxygen.buffer,
       radicals: radicals.buffer,
       remaining: remaining.buffer,
-      diagnostics,
+      diagnostics: {
+        ...diagnostics,
+        exposureStep: volumeDiagnostics.exposureStep,
+        exposureStepsTotal: volumeDiagnostics.exposureStepsTotal,
+        developmentStep: volumeDiagnostics.developmentStep,
+        developmentStepsTotal: volumeDiagnostics.developmentStepsTotal,
+        simulatedTimeSeconds: volumeDiagnostics.simulatedTimeSeconds,
+        volume: volumeDiagnostics,
+        checksum: volumeDiagnostics.checksum,
+      },
       metrics: {
         ...lensStatistics,
         pulseEnergyPj,
         peakPowerW:
           pulseEnergyPj * 1e-12 / Math.max(1e-15, params.pulseDuration * 1e-15),
-        checksum: diagnostics.checksum,
-        cellSizeNm: Math.round((LENS_W_UM / (GRID_W - 1)) * 1000),
+        checksum: volumeDiagnostics.checksum,
+        cellSizeNm: Math.round(Math.min(...volumeDiagnostics.voxelPitchUm) * 1000),
         timestepModel: diagnostics.timestepModel,
       },
     },
@@ -1126,6 +1036,13 @@ async function initializeSolver() {
     const initialized = await initReactionLens({
       module_or_path: reactionLensWasmUrl,
     });
+    const occupancyResponse = await fetch("/benchy/3dbenchy-occupancy.bin");
+    if (!occupancyResponse.ok) {
+      throw new Error(
+        `Could not load the 3DBenchy occupancy (${occupancyResponse.status})`,
+      );
+    }
+    benchyOccupancy = new Uint8Array(await occupancyResponse.arrayBuffer());
     const memory = initialized.memory;
     wasmMemory = memory;
     solverState = "ready";

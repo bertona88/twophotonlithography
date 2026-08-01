@@ -18,7 +18,31 @@ if [[ ! -x "${vinext}" ]]; then
   exit 69
 fi
 
-"${script_dir}/build-wasm.sh" web
+wasm_dir="${SITES_PROJECT_ROOT}/app/wasm/reaction_lens"
+wasm_binary="${wasm_dir}/reaction_lens_bg.wasm"
+
+if command -v cargo >/dev/null && command -v wasm-pack >/dev/null; then
+  "${script_dir}/build-wasm.sh" web
+else
+  for generated in \
+    "${wasm_dir}/reaction_lens.js" \
+    "${wasm_dir}/reaction_lens.d.ts" \
+    "${wasm_binary}" \
+    "${wasm_dir}/reaction_lens_bg.wasm.d.ts"; do
+    [[ -f "${generated}" ]] || {
+      echo "Missing pinned Rust/Wasm artifact: ${generated}" >&2
+      exit 66
+    }
+  done
+
+  wasm_magic="$(od -An -tx1 -N4 "${wasm_binary}" | tr -d '[:space:]')"
+  [[ "${wasm_magic}" == "0061736d" ]] || {
+    echo "Invalid WebAssembly magic bytes in ${wasm_binary}." >&2
+    exit 65
+  }
+
+  echo "Rust toolchain unavailable; using the pinned Rust/Wasm browser artifact."
+fi
 
 echo "Running bounded vinext build..."
 timeout \

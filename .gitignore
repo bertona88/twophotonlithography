@@ -45,5 +45,6 @@ next-env.d.ts
 
 # Rust / WebAssembly build outputs
 /rust/reaction-lens/target/
-/app/wasm/reaction_lens/
+# Production deploys consume the pinned, reviewed Wasm artifact. Developers with
+# the Rust toolchain can regenerate it with `npm run build:wasm`.
 /.wasm-test/

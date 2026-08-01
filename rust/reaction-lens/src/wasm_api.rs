@@ -1,6 +1,9 @@
 use wasm_bindgen::prelude::*;
 
-use crate::{Diagnostics, Parameters, Simulation, SimulationConfig};
+use crate::{
+    Diagnostics, Parameters, Simulation, SimulationConfig, VolumeDiagnostics, WholeVolumeConfig,
+    WholeVolumeCore,
+};
 
 /// JavaScript-facing owner of the authoritative numerical state.
 #[wasm_bindgen]
@@ -94,6 +97,69 @@ impl ReactionLensSimulation {
 #[wasm_bindgen]
 pub fn create_simulation(config: JsValue, seed: u32) -> Result<ReactionLensSimulation, JsValue> {
     ReactionLensSimulation::new(config, seed)
+}
+
+/// JavaScript-facing owner of the adaptive dense 3D resin volume.
+#[wasm_bindgen]
+pub struct WholeVolumeSimulation {
+    inner: WholeVolumeCore,
+}
+
+#[wasm_bindgen]
+impl WholeVolumeSimulation {
+    #[wasm_bindgen(constructor)]
+    pub fn new(config: JsValue, occupancy: &[u8]) -> Result<WholeVolumeSimulation, JsValue> {
+        let config: WholeVolumeConfig = serde_wasm_bindgen::from_value(config)
+            .map_err(|error| js_error(format!("invalid whole-volume config: {error}")))?;
+        let inner = WholeVolumeCore::try_new(config, occupancy).map_err(validation_error)?;
+        Ok(Self { inner })
+    }
+
+    pub fn set_parameters(&mut self, parameters: JsValue) -> Result<(), JsValue> {
+        let parameters: Parameters = serde_wasm_bindgen::from_value(parameters)
+            .map_err(|error| js_error(format!("invalid parameters: {error}")))?;
+        self.inner
+            .set_parameters(parameters)
+            .map_err(validation_error)
+    }
+
+    pub fn reset(&mut self) {
+        self.inner.reset();
+    }
+
+    pub fn advance_exposure_steps(&mut self, step_count: u32) -> u32 {
+        self.inner.advance_exposure_steps(step_count)
+    }
+
+    pub fn advance_development_steps(&mut self, step_count: u32) -> u32 {
+        self.inner.advance_development_steps(step_count)
+    }
+
+    pub fn get_snapshot(&mut self) -> u32 {
+        self.inner.snapshot().as_ptr() as u32
+    }
+
+    pub fn snapshot_len(&self) -> u32 {
+        self.inner.snapshot_len() as u32
+    }
+
+    pub fn focus(&self) -> Vec<f32> {
+        self.inner.focus().to_vec()
+    }
+
+    pub fn exposure_progress(&self) -> f64 {
+        self.inner.exposure_progress()
+    }
+
+    pub fn development_progress(&self) -> f64 {
+        self.inner.development_progress()
+    }
+
+    pub fn get_diagnostics(&self) -> Result<JsValue, JsValue> {
+        let diagnostics: VolumeDiagnostics = self.inner.diagnostics();
+        serde_wasm_bindgen::to_value(&diagnostics)
+            .map_err(|error| js_error(format!("could not serialize volume diagnostics: {error}")))
+    }
 }
 
 fn validation_error(error: impl std::fmt::Display) -> JsValue {

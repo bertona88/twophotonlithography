@@ -11,6 +11,22 @@ use crate::simulation::{
 pub(crate) const MAX_EXPOSURE_STEPS_TOTAL: u32 = 10_000_000;
 const MAX_EXPLICIT_DIFFUSION_COURANT: f64 = 0.5;
 
+fn default_layer_height() -> f64 {
+    0.48
+}
+
+fn default_hatch_spacing() -> f64 {
+    0.72
+}
+
+fn default_hatch_angle() -> f64 {
+    37.0
+}
+
+fn default_contour_count() -> f64 {
+    2.0
+}
+
 /// Small, JSON-like configuration passed once while constructing the Wasm core.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +62,14 @@ impl SimulationConfig {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Parameters {
+    #[serde(default = "default_layer_height")]
+    pub layer_height: f64,
+    #[serde(default = "default_hatch_spacing")]
+    pub hatch_spacing: f64,
+    #[serde(default = "default_hatch_angle")]
+    pub hatch_angle: f64,
+    #[serde(default = "default_contour_count")]
+    pub contour_count: f64,
     pub passes: f64,
     pub power: f64,
     pub speed: f64,
@@ -73,6 +97,10 @@ pub struct Parameters {
 impl Default for Parameters {
     fn default() -> Self {
         Self {
+            layer_height: 0.48,
+            hatch_spacing: 0.72,
+            hatch_angle: 37.0,
+            contour_count: 2.0,
             passes: 1.0,
             power: 16.0,
             speed: 45.0,
@@ -102,6 +130,10 @@ impl Default for Parameters {
 impl Parameters {
     /// Reject values that cannot be evolved safely by the explicit solver.
     pub fn validate(&self) -> Result<(), ValidationError> {
+        positive("layerHeight", self.layer_height)?;
+        positive("hatchSpacing", self.hatch_spacing)?;
+        finite("hatchAngle", self.hatch_angle)?;
+        nonnegative("contourCount", self.contour_count)?;
         finite("passes", self.passes)?;
         if !(1.0..=3.0).contains(&self.passes) || self.passes.fract() != 0.0 {
             return Err(ValidationError::new(

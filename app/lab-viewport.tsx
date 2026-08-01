@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { initializeRenderer } from "./renderer-initialization";
+import { voxelActivity } from "./volume-visualization";
 
 export type FieldMode = "conversion" | "oxygen" | "radicals" | "development";
 
@@ -18,6 +19,7 @@ type LabViewportProps = {
   progress: number;
   selectedLayer: number;
   layerHeight: number;
+  voxelPitch: [number, number, number];
   fieldMode: FieldMode;
   stage: string;
 };
@@ -28,7 +30,7 @@ type SceneHandles = {
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
   path: THREE.LineSegments;
-  materialPoints: THREE.Points;
+  materialPoints: THREE.InstancedMesh;
   focus: THREE.Mesh;
   focusHalo: THREE.Mesh;
   beam: THREE.Mesh;
@@ -49,107 +51,27 @@ const IVORY = new THREE.Color("#f1e4c8");
 const SLATE = new THREE.Color("#69728e");
 const DARK = new THREE.Color("#111724");
 
-function addWireShell(
-  group: THREE.Group,
-  geometry: THREE.BufferGeometry,
-  position: [number, number, number],
-  scale: [number, number, number] = [1, 1, 1],
-  rotation: [number, number, number] = [0, 0, 0],
-) {
+async function loadBenchyTarget(scene: THREE.Scene, signal: AbortSignal) {
+  const response = await fetch("/benchy/3dbenchy-mesh.bin", { signal });
+  if (!response.ok) throw new Error(`3DBenchy mesh returned ${response.status}`);
+  const positions = new Float32Array(await response.arrayBuffer());
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.computeVertexNormals();
   const surface = new THREE.Mesh(
     geometry,
     new THREE.MeshPhysicalMaterial({
-      color: "#dfe8ff",
+      color: "#b9c7eb",
       transparent: true,
-      opacity: 0.035,
+      opacity: 0.08,
       roughness: 0.18,
       metalness: 0,
       side: THREE.DoubleSide,
       depthWrite: false,
     }),
   );
-  surface.position.set(...position);
-  surface.scale.set(...scale);
-  surface.rotation.set(...rotation);
-  group.add(surface);
-
-  const wire = new THREE.Mesh(
-    geometry.clone(),
-    new THREE.MeshBasicMaterial({
-      color: "#99a9ce",
-      wireframe: true,
-      transparent: true,
-      opacity: 0.11,
-      depthWrite: false,
-    }),
-  );
-  wire.position.copy(surface.position);
-  wire.scale.copy(surface.scale);
-  wire.rotation.copy(surface.rotation);
-  group.add(wire);
-}
-
-function createBenchyTarget() {
-  const group = new THREE.Group();
-  group.name = "target-micro-benchy";
-
-  addWireShell(
-    group,
-    new THREE.SphereGeometry(1, 38, 18),
-    [-0.45, 0, 2.55],
-    [10.65, 4.35, 2.55],
-  );
-  addWireShell(
-    group,
-    new THREE.BoxGeometry(14.8, 7.9, 0.58, 8, 4, 1),
-    [-0.15, 0, 5.08],
-  );
-  addWireShell(
-    group,
-    new THREE.BoxGeometry(9.2, 6.45, 3.65, 5, 4, 3),
-    [2.1, 0, 7.05],
-  );
-  addWireShell(
-    group,
-    new THREE.BoxGeometry(10.75, 7.55, 0.7, 6, 4, 1),
-    [2.15, 0, 9.25],
-  );
-  addWireShell(
-    group,
-    new THREE.CylinderGeometry(0.88, 1.18, 3.15, 24, 3, true),
-    [4.1, 0, 11.1],
-    [1, 1, 1],
-    [Math.PI / 2, 0, 0],
-  );
-
-  const windowMaterial = new THREE.MeshBasicMaterial({
-    color: "#05070d",
-    transparent: true,
-    opacity: 0.76,
-    depthWrite: false,
-  });
-  const sideWindowGeometry = new THREE.PlaneGeometry(2.45, 1.55);
-  for (const y of [-3.26, 3.26]) {
-    for (const x of [0.4, 3.55]) {
-      const windowMesh = new THREE.Mesh(sideWindowGeometry, windowMaterial);
-      windowMesh.position.set(x, y, 7.35);
-      windowMesh.rotation.set(Math.PI / 2, 0, 0);
-      group.add(windowMesh);
-    }
-  }
-
-  const label = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      color: "#aeb9d6",
-      transparent: true,
-      opacity: 0.5,
-      depthWrite: false,
-    }),
-  );
-  label.scale.set(0.24, 0.24, 0.24);
-  label.position.set(-10.8, 0, 5.4);
-  group.add(label);
-  return group;
+  surface.name = "official-3dbenchy-target";
+  scene.add(surface);
 }
 
 function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): SceneHandles {
@@ -238,8 +160,6 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
   resinEdges.position.copy(resin.position);
   scene.add(resinEdges);
 
-  scene.add(createBenchyTarget());
-
   const path = new THREE.LineSegments(
     new THREE.BufferGeometry(),
     new THREE.LineBasicMaterial({
@@ -251,18 +171,19 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
   );
   scene.add(path);
 
-  const materialPoints = new THREE.Points(
-    new THREE.BufferGeometry(),
-    new THREE.PointsMaterial({
-      size: 0.22,
-      sizeAttenuation: true,
+  const materialPoints = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshBasicMaterial({
       vertexColors: true,
       transparent: true,
-      opacity: 0.94,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      opacity: 0.82,
+      depthWrite: true,
+      blending: THREE.NormalBlending,
     }),
+    60_000,
   );
+  materialPoints.count = 0;
+  materialPoints.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   materialPoints.visible = false;
   scene.add(materialPoints);
 
@@ -408,8 +329,8 @@ export default function LabViewport({
   progress,
   selectedLayer,
   layerHeight,
+  voxelPitch,
   fieldMode,
-  stage,
 }: LabViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -423,6 +344,7 @@ export default function LabViewport({
 
     let handles: SceneHandles | null = null;
     let disposed = false;
+    const meshAbortController = new AbortController();
     const handleContextLost = (event: Event) => {
       event.preventDefault();
       if (handles) {
@@ -442,10 +364,14 @@ export default function LabViewport({
     );
     if (handles) {
       handlesRef.current = handles;
+      void loadBenchyTarget(handles.scene, meshAbortController.signal).catch(
+        () => undefined,
+      );
     }
 
     return () => {
       disposed = true;
+      meshAbortController.abort();
       canvas.removeEventListener("webglcontextlost", handleContextLost);
       if (handles) {
         disposeScene(handles);
@@ -475,56 +401,77 @@ export default function LabViewport({
   useEffect(() => {
     const handles = handlesRef.current;
     if (!handles || !macroPositions) return;
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute(
-      "position",
-      new THREE.BufferAttribute(macroPositions.slice(), 3),
+    const count = Math.min(60_000, Math.floor(macroPositions.length / 3));
+    const matrix = new THREE.Matrix4();
+    const position = new THREE.Vector3();
+    const scale = new THREE.Vector3(
+      voxelPitch[0] * 0.92,
+      voxelPitch[1] * 0.92,
+      voxelPitch[2] * 0.92,
     );
-    geometry.setAttribute(
-      "color",
-      new THREE.BufferAttribute(new Float32Array(macroPositions.length), 3),
-    );
-    handles.materialPoints.geometry.dispose();
-    handles.materialPoints.geometry = geometry;
-  }, [macroPositions]);
+    const quaternion = new THREE.Quaternion();
+    for (let index = 0; index < count; index += 1) {
+      position.fromArray(macroPositions, index * 3);
+      matrix.compose(position, quaternion, scale);
+      handles.materialPoints.setMatrixAt(index, matrix);
+    }
+    handles.materialPoints.count = count;
+    handles.materialPoints.instanceMatrix.needsUpdate = true;
+    handles.materialPoints.computeBoundingSphere();
+  }, [macroPositions, voxelPitch]);
 
   useEffect(() => {
     const handles = handlesRef.current;
     if (!handles || !conversion || !macroPositions) return;
-    const geometry = handles.materialPoints.geometry;
-    const colorAttribute = geometry.getAttribute("color") as
-      | THREE.BufferAttribute
-      | undefined;
-    if (!colorAttribute || colorAttribute.count !== conversion.length) return;
-
     let visible = false;
     const color = new THREE.Color();
-    for (let index = 0; index < conversion.length; index += 1) {
+    const matrix = new THREE.Matrix4();
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    const count = Math.min(handles.materialPoints.count, conversion.length);
+    for (let index = 0; index < count; index += 1) {
       const conversionValue = conversion[index] / 255;
       const oxygenValue = (oxygen?.[index] ?? 255) / 255;
       const radicalValue = (radicals?.[index] ?? 0) / 255;
       const remainingValue = (remaining?.[index] ?? 255) / 255;
+      const activity = voxelActivity(
+        fieldMode,
+        conversionValue,
+        oxygenValue,
+        radicalValue,
+        remainingValue,
+      );
+
+      position.fromArray(macroPositions, index * 3);
+      const visibleScale = activity <= 0 ? 0 : 0.58 + Math.sqrt(activity) * 0.42;
+      scale.set(
+        voxelPitch[0] * 0.92 * visibleScale,
+        voxelPitch[1] * 0.92 * visibleScale,
+        voxelPitch[2] * 0.92 * visibleScale,
+      );
+      matrix.compose(position, quaternion, scale);
+      handles.materialPoints.setMatrixAt(index, matrix);
 
       if (fieldMode === "oxygen") {
-        color.copy(DARK).lerp(CYAN, oxygenValue);
-        visible ||= oxygenValue < 0.99 || stage === "exposing";
+        color.copy(DARK).lerp(CYAN, 1 - oxygenValue);
       } else if (fieldMode === "development") {
         color.copy(DARK).lerp(IVORY, remainingValue * conversionValue);
-        visible ||= stage === "developing" || stage === "complete";
       } else if (fieldMode === "radicals") {
         color.copy(DARK).lerp(GOLD, radicalValue);
-        visible ||= radicalValue > 0.03;
       } else if (conversionValue >= 0.3 && remainingValue > 0.2) {
         const gel = clamp01((conversionValue - 0.3) / 0.7);
         color.copy(AMBER).lerp(IVORY, gel * remainingValue);
-        visible = true;
       } else {
         color.copy(DARK).lerp(AMBER, conversionValue * 1.8);
-        visible ||= conversionValue > 0.018;
       }
-      colorAttribute.setXYZ(index, color.r, color.g, color.b);
+      visible ||= activity > 0;
+      handles.materialPoints.setColorAt(index, color);
     }
-    colorAttribute.needsUpdate = true;
+    handles.materialPoints.instanceMatrix.needsUpdate = true;
+    if (handles.materialPoints.instanceColor) {
+      handles.materialPoints.instanceColor.needsUpdate = true;
+    }
     handles.materialPoints.visible = visible;
   }, [
     conversion,
@@ -533,7 +480,7 @@ export default function LabViewport({
     remaining,
     fieldMode,
     macroPositions,
-    stage,
+    voxelPitch,
   ]);
 
   useEffect(() => {

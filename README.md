@@ -63,9 +63,10 @@ than serialized as JSON. The worker copies the snapshot into compact rendering
 buffers before transfer, so rendering never receives a mutable view of Wasm
 simulation memory.
 
-The reduced whole-Benchy path-node chemistry remains in TypeScript for this
-milestone. It is a separate coarse visualization model, not the authoritative
-Reaction Lens solver and not a sparse three-dimensional chemistry domain.
+The whole-Benchy view now uses the official CreativeTools geometry and a dense,
+adaptive three-dimensional resin volume owned by Rust/Wasm. The worker loads a
+deterministic occupancy asset, selects a memory tier, schedules the scan, and
+copies compact render snapshots; TypeScript does not evolve chemistry.
 
 ## Local setup
 
@@ -188,33 +189,33 @@ application does not silently substitute fake chemistry.
 
 ## Scientific limitations
 
-This is an educational reduced continuum model, not a calibrated prediction for
+This is an educational continuum model, not a calibrated prediction for
 a commercial photoresist.
 
 - The Reaction Lens is a two-dimensional `x–z` domain following a synthetic,
   predetermined focus trajectory; it is not yet coupled to a genuinely movable
   lens over arbitrary geometry.
-- The reduced whole-Benchy chemistry remains TypeScript path-node logic. It is
-  not the lens solver and is not a spatially resolved three-dimensional result.
-- There is no arbitrary STL parsing or slicing and no sparse 3D chemistry
-  domain.
+- The bundled 3DBenchy is voxelized offline; arbitrary uploaded STL execution is
+  not implemented yet.
 - The seed is explicit replay metadata, but the preserved model currently has
   no stochastic term; equal inputs are deterministic without injected noise.
 - Time is nondimensional, and parameters are not fitted to a particular resin.
-- The optical source is reduced rather than a full vectorial diffraction model.
-  Thermal effects, shrinkage, stress, and experimentally calibrated development
-  kinetics are outside the present scope.
+- The whole-volume optical kernel is a circular-polarization vectorial Debye
+  integral with a two-photon `I²` source. Thermal effects, shrinkage, stress,
+  and experimentally calibrated development kinetics remain outside scope.
 
-The recommended next milestone is **real STL parsing and slicing, followed by a
-sparse 3D chemistry domain shared with a genuinely movable Reaction Lens**.
+The recommended next milestone is **validated arbitrary-mesh import and
+experimental calibration against a named resin/process dataset**.
 
 ## Repository map
 
 - `app/page.tsx` — laboratory UI, slicer state, timeline, controls, and
   diagnostics
 - `app/lab-viewport.tsx` — client-only Three.js viewport
-- `app/simulation.worker.ts` — Wasm initialization, message handling, scheduling,
-  snapshot packing, and reduced whole-Benchy path-node model
+- `app/simulation.worker.ts` — Wasm initialization, message handling, adaptive
+  memory input, scheduling, and immutable snapshot transfer
+- `rust/reaction-lens/src/whole_volume.rs` — dense 3D resin, vectorial PSF,
+  scan timing, exposure chemistry, threshold conversion, and development
 - `rust/reaction-lens/` — authoritative Reaction Lens numerical core and Rust
   tests
 - `scripts/build-wasm.sh` — pinned browser and Node Wasm builds
