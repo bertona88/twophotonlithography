@@ -69,9 +69,19 @@ export class WholeVolumeSimulation {
     exposure_progress(): number;
     focus(): Float32Array;
     get_diagnostics(): any;
+    /**
+     * Physical Z coordinate of every emitted scan layer (f32 elements).
+     */
+    get_layer_positions(): number;
+    /**
+     * Packed illuminated line segments in XYZXYZ order (f32 elements).
+     */
+    get_scan_path(): number;
     get_snapshot(): number;
+    layer_positions_len(): number;
     constructor(config: any, occupancy: Uint8Array);
     reset(): void;
+    scan_path_len(): number;
     set_parameters(parameters: any): void;
     snapshot_len(): number;
 }
@@ -105,6 +115,10 @@ export interface InitOutput {
     readonly wholevolumesimulation_advance_development_steps: (a: number, b: number) => number;
     readonly wholevolumesimulation_get_snapshot: (a: number) => number;
     readonly wholevolumesimulation_snapshot_len: (a: number) => number;
+    readonly wholevolumesimulation_get_scan_path: (a: number) => number;
+    readonly wholevolumesimulation_scan_path_len: (a: number) => number;
+    readonly wholevolumesimulation_get_layer_positions: (a: number) => number;
+    readonly wholevolumesimulation_layer_positions_len: (a: number) => number;
     readonly wholevolumesimulation_focus: (a: number, b: number) => void;
     readonly wholevolumesimulation_exposure_progress: (a: number) => number;
     readonly wholevolumesimulation_development_progress: (a: number) => number;

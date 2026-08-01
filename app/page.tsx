@@ -10,6 +10,7 @@ import {
 import dynamic from "next/dynamic";
 import type { FieldMode } from "./lab-viewport";
 import { shouldIgnoreLabShortcut } from "./keyboard-shortcuts";
+import { multipassPathProgress } from "./volume-visualization";
 
 const LabViewport = dynamic(() => import("./lab-viewport"), {
   ssr: false,
@@ -60,15 +61,22 @@ type ModelParams = {
 
 type ModelKey = keyof ModelParams;
 
-type Metrics = {
+type ChemistryMetrics = {
   oxygenMean: number;
   conversionMean: number;
   radicalMax: number;
   gelledFraction: number;
   survivingFraction: number;
+};
+
+type Metrics = ChemistryMetrics & {
   pulseEnergyPj: number;
   peakPowerW: number;
   checksum: string;
+  cellSizeNm: number;
+};
+
+type LensMetrics = ChemistryMetrics & {
   cellSizeNm: number;
   timestepModel: number;
 };
@@ -82,35 +90,46 @@ type SolverDiagnostics = {
   timestepModel: number;
   updatesPerSecond: number;
   simulatedModelTime: number;
+  ownedMemoryBytes: number;
   wasmMemoryBytes: number;
   checksum: string;
-  volume?: {
-    solver: string;
-    qualityTier: string;
-    gridWidth: number;
-    gridHeight: number;
-    gridDepth: number;
-    voxelPitchUm: [number, number, number];
-    memoryBudgetBytes: number;
-    ownedMemoryBytes: number;
-    downgradeReason?: string;
-    psfModel: string;
-    psfPupilSamples: number;
-    psfKernelVoxels: number;
-    scanPoints: number;
-    simulatedTimeSeconds: number;
-    checksum: string;
-  };
+};
+
+type VolumeDiagnostics = {
+  solver: string;
+  qualityTier: string;
+  gridWidth: number;
+  gridHeight: number;
+  gridDepth: number;
+  voxelPitchUm: [number, number, number];
+  memoryBudgetBytes: number;
+  ownedMemoryBytes: number;
+  downgradeReason?: string;
+  psfModel: string;
+  psfPupilSamples: number;
+  psfKernelVoxels: number;
+  scanPoints: number;
+  layerCount: number;
+  pathLengthUm: number;
+  estimatedExposureSeconds: number;
+  simulatedTimeSeconds: number;
+  oxygenMean: number;
+  radicalMax: number;
+  conversionMean: number;
+  gelledFraction: number;
+  survivingFraction: number;
+  checksum: string;
 };
 
 type SliceInfo = {
   layerCount: number;
-  pathLength: number;
-  estimatedSeconds: number;
+  pathLengthUm: number;
+  estimatedExposureSeconds: number;
 };
 
 type RunResult = {
   metrics: Metrics;
+  lensMetrics: LensMetrics;
   conversion: Uint8Array;
   oxygen: Uint8Array;
   radicals: Uint8Array;
@@ -119,6 +138,7 @@ type RunResult = {
   lensWidth: number;
   lensHeight: number;
   diagnostics: SolverDiagnostics;
+  volumeDiagnostics: VolumeDiagnostics;
   diffusion: number;
 };
 
@@ -168,6 +188,8 @@ const SLICER_KEYS = new Set<ModelKey>([
   "hatchSpacing",
   "hatchAngle",
   "contourCount",
+  "passes",
+  "speed",
 ]);
 
 const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinition[]> =
@@ -448,9 +470,18 @@ const EMPTY_METRICS: Metrics = {
   radicalMax: 0,
   gelledFraction: 0,
   survivingFraction: 1,
-  pulseEnergyPj: 0.2,
-  peakPowerW: 2,
+  pulseEnergyPj: 200,
+  peakPowerW: 2000,
   checksum: "00000000",
+  cellSizeNm: 135,
+};
+
+const EMPTY_LENS_METRICS: LensMetrics = {
+  oxygenMean: 1,
+  conversionMean: 0,
+  radicalMax: 0,
+  gelledFraction: 0,
+  survivingFraction: 1,
   cellSizeNm: 135,
   timestepModel: 0.016,
 };
@@ -462,6 +493,7 @@ const EMPTY_SOLVER_DIAGNOSTICS: SolverDiagnostics = {
   timestepModel: 0.016,
   updatesPerSecond: 0,
   simulatedModelTime: 0,
+  ownedMemoryBytes: 0,
   wasmMemoryBytes: 0,
   checksum: "00000000",
 };
@@ -570,7 +602,7 @@ function ReactionLens({
   onFieldMode: (mode: FieldMode) => void;
   mobileOpen: boolean;
   onMobileClose: () => void;
-  metrics: Metrics;
+  metrics: LensMetrics;
   solverState: SolverState;
   diagnostics: SolverDiagnostics;
 }) {
@@ -631,13 +663,13 @@ function ReactionLens({
     <section
       className={`reaction-lens glass-panel ${mobileOpen ? "mobile-open" : ""}`}
       id="reaction-lens-panel"
-      aria-label="Reaction Lens"
+      aria-label="2D Reaction Lens diagnostic"
       data-mobile-open={mobileOpen ? "true" : "false"}
     >
       <div className="lens-heading">
         <div>
-          <span className="eyebrow">Reaction Lens</span>
-          <strong>15 × 9 µm · XZ</strong>
+          <span className="eyebrow">Reaction Lens · 2D diagnostic</span>
+          <strong>15 × 9 µm · XZ field</strong>
         </div>
         <span className="live-indicator">
           <i />
@@ -686,40 +718,25 @@ function ReactionLens({
           gel <strong>{(metrics.gelledFraction * 100).toFixed(1)}%</strong>
         </span>
       </div>
-      <div className="lens-diagnostics" aria-label="Solver diagnostics">
+      <div
+        className="lens-diagnostics"
+        aria-label="2D Reaction Lens solver diagnostics"
+      >
         <span>
-          <strong>{diagnostics.volume?.solver ?? diagnostics.solver}</strong>
-          {diagnostics.volume
-            ? `${diagnostics.volume.gridWidth}×${diagnostics.volume.gridHeight}×${diagnostics.volume.gridDepth}`
-            : `${diagnostics.gridWidth}×${diagnostics.gridHeight}`}
+          <strong>{diagnostics.solver}</strong>
+          {`${diagnostics.gridWidth}×${diagnostics.gridHeight}`}
         </span>
         <span>
-          <strong>{diagnostics.volume?.qualityTier ?? "lens"} tier</strong>
-          {diagnostics.volume
-            ? diagnostics.volume.voxelPitchUm
-                .map((value) => value.toFixed(3))
-                .join("×") + " µm"
-            : `Δt ${diagnostics.timestepModel.toFixed(3)} T₀`}
+          <strong>2D lens tier</strong>
+          {`Δt ${diagnostics.timestepModel.toFixed(3)} T₀`}
         </span>
         <span>
-          <strong>
-            {diagnostics.volume
-              ? `${diagnostics.volume.psfPupilSamples} pupil rays`
-              : `t ${diagnostics.simulatedModelTime.toFixed(2)} T₀`}
-          </strong>
-          {diagnostics.volume
-            ? `${diagnostics.volume.psfKernelVoxels} PSF voxels`
-            : formatMemory(diagnostics.wasmMemoryBytes)}
+          <strong>{formatMemory(diagnostics.ownedMemoryBytes)}</strong>
+          {`2D owned · t ${diagnostics.simulatedModelTime.toFixed(2)} T₀`}
         </span>
-        <span title={diagnostics.volume?.downgradeReason}>
-          <strong>
-            {formatMemory(
-              diagnostics.volume?.ownedMemoryBytes ?? diagnostics.wasmMemoryBytes,
-            )}
-          </strong>
-          {diagnostics.volume
-            ? `of ${formatMemory(diagnostics.volume.memoryBudgetBytes)} budget`
-            : `${diagnostics.updatesPerSecond.toFixed(0)} updates/s`}
+        <span>
+          <strong>{formatMemory(diagnostics.wasmMemoryBytes)}</strong>
+          {`total · replay ${diagnostics.checksum}`}
         </span>
       </div>
     </section>
@@ -774,6 +791,7 @@ export default function Home() {
   const [dirty, setDirty] = useState<DirtyKind>(null);
   const [fieldMode, setFieldMode] = useState<FieldMode>("conversion");
   const [pathPositions, setPathPositions] = useState<Float32Array | null>(null);
+  const [layerPositions, setLayerPositions] = useState<Float32Array | null>(null);
   const [macroPositions, setMacroPositions] = useState<Float32Array | null>(null);
   const [conversion, setConversion] = useState<Uint8Array | null>(null);
   const [oxygen, setOxygen] = useState<Uint8Array | null>(null);
@@ -783,7 +801,10 @@ export default function Home() {
   const [lensWidth, setLensWidth] = useState(112);
   const [lensHeight, setLensHeight] = useState(68);
   const [metrics, setMetrics] = useState<Metrics>(EMPTY_METRICS);
+  const [lensMetrics, setLensMetrics] =
+    useState<LensMetrics>(EMPTY_LENS_METRICS);
   const [sliceInfo, setSliceInfo] = useState<SliceInfo | null>(null);
+  const [appliedPasses, setAppliedPasses] = useState(DEFAULT_PARAMS.passes);
   const [exposureProgress, setExposureProgress] = useState(0);
   const [developmentProgress, setDevelopmentProgress] = useState(0);
   const [simulatedSeconds, setSimulatedSeconds] = useState(0);
@@ -799,6 +820,8 @@ export default function Home() {
   const [solverError, setSolverError] = useState<string | null>(null);
   const [solverDiagnostics, setSolverDiagnostics] =
     useState<SolverDiagnostics>(EMPTY_SOLVER_DIAGNOSTICS);
+  const [volumeDiagnostics, setVolumeDiagnostics] =
+    useState<VolumeDiagnostics | null>(null);
 
   useEffect(() => {
     const mobileQuery = window.matchMedia(MOBILE_LAYOUT_QUERY);
@@ -908,11 +931,17 @@ export default function Home() {
           }
         }
         if (message.status === "error") {
+          variantRunningRef.current = false;
           setSolverError(message.message || "The Rust/Wasm solver could not initialize.");
         }
         return;
       }
       if (message.type === "commandError") {
+        if (variantRunningRef.current) {
+          variantRunningRef.current = false;
+          setBaseline(null);
+          setVariant(null);
+        }
         setNotice(message.message || "The simulation command was rejected.");
         if (message.stage) {
           setStage(message.stage);
@@ -925,13 +954,17 @@ export default function Home() {
         return;
       }
       if (message.type === "sliceResult") {
-        setPathPositions(new Float32Array(message.lines));
-        setMacroPositions(new Float32Array(message.nodes));
+        setPathPositions(new Float32Array(message.pathPositions));
+        setMacroPositions(new Float32Array(message.renderPositions));
+        setLayerPositions(new Float32Array(message.layerPositions));
         setSliceInfo({
           layerCount: message.layerCount,
-          pathLength: message.pathLength,
-          estimatedSeconds: message.estimatedSeconds,
+          pathLengthUm: message.pathLengthUm,
+          estimatedExposureSeconds: message.estimatedExposureSeconds,
         });
+        setAppliedPasses(
+          Number.isFinite(message.passes) ? message.passes : DEFAULT_PARAMS.passes,
+        );
         setSelectedLayer(Math.max(0, Math.floor(message.layerCount * 0.43)));
         setStage("ready");
         return;
@@ -946,7 +979,10 @@ export default function Home() {
       const nextRemaining = new Uint8Array(message.remaining);
       const nextLensPixels = new Uint8Array(message.lens);
       const nextDiagnostics =
-        message.diagnostics ?? EMPTY_SOLVER_DIAGNOSTICS;
+        message.lensDiagnostics ??
+        message.diagnostics ??
+        EMPTY_SOLVER_DIAGNOSTICS;
+      const nextVolumeMetrics = message.volumeMetrics ?? message.metrics;
       latestArraysRef.current = {
         conversion: nextConversion,
         oxygen: nextOxygen,
@@ -960,17 +996,20 @@ export default function Home() {
       setLensPixels(nextLensPixels);
       setLensWidth(message.lensWidth);
       setLensHeight(message.lensHeight);
-      setMetrics(message.metrics);
+      setMetrics(nextVolumeMetrics);
+      setLensMetrics(message.lensMetrics);
       setExposureProgress(message.exposureProgress);
       setDevelopmentProgress(message.developmentProgress);
       setSimulatedSeconds(message.simulatedSeconds);
       setFocus(message.focus);
       setSolverDiagnostics(nextDiagnostics);
+      setVolumeDiagnostics(message.volumeDiagnostics);
 
       if (message.stage === "complete" && variantRunningRef.current) {
         variantRunningRef.current = false;
         setVariant({
-          metrics: message.metrics,
+          metrics: nextVolumeMetrics,
+          lensMetrics: message.lensMetrics,
           conversion: nextConversion.slice(),
           oxygen: nextOxygen.slice(),
           radicals: nextRadicals.slice(),
@@ -979,21 +1018,31 @@ export default function Home() {
           lensWidth: message.lensWidth,
           lensHeight: message.lensHeight,
           diagnostics: nextDiagnostics,
+          volumeDiagnostics: message.volumeDiagnostics,
           diffusion: variantDiffusionRef.current,
         });
         setStage("compare");
+        setNotice(
+          `Branch B completed at Dₒ ${variantDiffusionRef.current.toFixed(4)}; comparison metrics are ready.`,
+        );
       } else {
         setStage(message.stage);
       }
     };
     worker.onerror = (event) => {
       event.preventDefault();
+      variantRunningRef.current = false;
+      setBaseline(null);
+      setVariant(null);
       setSolverState("error");
       setSolverError(
         event.message || "The simulation worker failed before Rust/Wasm initialized.",
       );
     };
     worker.onmessageerror = () => {
+      variantRunningRef.current = false;
+      setBaseline(null);
+      setVariant(null);
       setSolverState("error");
       setSolverError("The simulation worker returned an unreadable message.");
     };
@@ -1048,6 +1097,7 @@ export default function Home() {
 
   const slice = useCallback(
     (nextParams = params) => {
+      variantRunningRef.current = false;
       setDirty(null);
       setBaseline(null);
       setVariant(null);
@@ -1060,6 +1110,7 @@ export default function Home() {
   );
 
   const applyPhysics = useCallback(() => {
+    variantRunningRef.current = false;
     setDirty(null);
     setBaseline(null);
     setVariant(null);
@@ -1069,9 +1120,17 @@ export default function Home() {
 
   const branchOxygen = useCallback(() => {
     const arrays = latestArraysRef.current;
-    if (!arrays || !lensPixels) return;
+    if (!arrays || !lensPixels || !volumeDiagnostics) return;
+    const nextDiffusion = Math.min(0.012, params.oxygenDiffusion * 2);
+    if (nextDiffusion <= params.oxygenDiffusion) {
+      setNotice(
+        "Doubling the current oxygen diffusion would not produce a distinct branch.",
+      );
+      return;
+    }
     setBaseline({
       metrics,
+      lensMetrics,
       conversion: arrays.conversion.slice(),
       oxygen: arrays.oxygen.slice(),
       radicals: arrays.radicals.slice(),
@@ -1080,13 +1139,14 @@ export default function Home() {
       lensWidth,
       lensHeight,
       diagnostics: solverDiagnostics,
+      volumeDiagnostics,
       diffusion: params.oxygenDiffusion,
     });
     setVariant(null);
     setComparisonView("B");
     const nextParams = {
       ...params,
-      oxygenDiffusion: Math.min(0.012, params.oxygenDiffusion * 2),
+      oxygenDiffusion: nextDiffusion,
     };
     setParams(nextParams);
     variantDiffusionRef.current = nextParams.oxygenDiffusion;
@@ -1094,14 +1154,18 @@ export default function Home() {
     workerRef.current?.postMessage({ type: "configure", params: nextParams });
     workerRef.current?.postMessage({ type: "start" });
     setStage("exposing");
-    setNotice("Branch B is replaying the identical path with 2× oxygen diffusion.");
+    setNotice(
+      `Branch B is replaying the identical path with Dₒ ${params.oxygenDiffusion.toFixed(4)} → ${nextDiffusion.toFixed(4)}.`,
+    );
   }, [
     lensHeight,
+    lensMetrics,
     lensPixels,
     lensWidth,
     metrics,
     params,
     solverDiagnostics,
+    volumeDiagnostics,
   ]);
 
   const primaryAction = useCallback(() => {
@@ -1183,11 +1247,15 @@ export default function Home() {
     selectedRun ?? { conversion, oxygen, radicals, remaining };
 
   const displayMetrics = selectedRun?.metrics ?? metrics;
+  const displayLensMetrics = selectedRun?.lensMetrics ?? lensMetrics;
   const displayLensPixels = selectedRun?.lensPixels ?? lensPixels;
   const displayLensWidth = selectedRun?.lensWidth ?? lensWidth;
   const displayLensHeight = selectedRun?.lensHeight ?? lensHeight;
   const displaySolverDiagnostics =
     selectedRun?.diagnostics ?? solverDiagnostics;
+  const displayVolumeDiagnostics =
+    selectedRun?.volumeDiagnostics ?? volumeDiagnostics;
+  const selectedLayerZ = layerPositions?.[selectedLayer] ?? 0.18;
 
   const activeProcess = processIndex(stage, exposureProgress);
   const timelineProgress =
@@ -1224,7 +1292,12 @@ export default function Home() {
       };
     }
     setParams(next);
-    setDirty(preset === "fine" ? "slice" : "physics");
+    const changesSlicer = Array.from(SLICER_KEYS).some(
+      (key) => next[key] !== params[key],
+    );
+    setDirty((current) =>
+      current === "slice" || changesSlicer ? "slice" : "physics",
+    );
   };
 
   const handleDrop = (event: React.DragEvent) => {
@@ -1259,14 +1332,16 @@ export default function Home() {
         radicals={displayArrays.radicals}
         remaining={displayArrays.remaining}
         focus={focus}
-        progress={Math.max(
-          stage === "ready" ? 1 : 0,
-          stage === "model" || stage === "slicing" ? 0 : exposureProgress,
-        )}
-        selectedLayer={selectedLayer}
-        layerHeight={params.layerHeight}
+        progress={
+          stage === "ready"
+            ? 1
+            : stage === "model" || stage === "slicing"
+              ? 0
+              : multipassPathProgress(exposureProgress, appliedPasses)
+        }
+        selectedLayerZ={selectedLayerZ}
         voxelPitch={
-          displaySolverDiagnostics.volume?.voxelPitchUm ?? [0.18, 0.17, 0.18]
+          displayVolumeDiagnostics?.voxelPitchUm ?? [0.18, 0.17, 0.18]
         }
         fieldMode={fieldMode}
         stage={stage}
@@ -1343,10 +1418,13 @@ export default function Home() {
               <strong>{sliceInfo.layerCount}</strong> layers
             </span>
             <span>
-              <strong>{formatNumber(sliceInfo.pathLength, 0)}</strong> µm path
+              <strong>{formatNumber(sliceInfo.pathLengthUm, 0)}</strong> µm path
             </span>
             <span>
-              <strong>{formatNumber(sliceInfo.estimatedSeconds, 1)}</strong> s physical
+              <strong>
+                {formatNumber(sliceInfo.estimatedExposureSeconds, 1)}
+              </strong>{" "}
+              s physical
             </span>
           </div>
         )}
@@ -1393,7 +1471,7 @@ export default function Home() {
           lensTriggerRef.current?.focus();
           setMobileLensOpen(false);
         }}
-        metrics={displayMetrics}
+        metrics={displayLensMetrics}
         solverState={solverState}
         diagnostics={displaySolverDiagnostics}
       />
@@ -1534,6 +1612,47 @@ export default function Home() {
                   The mesh is voxelized once. Rust scans that occupancy through a
                   dense three-dimensional resin field; rendering never mutates it.
                 </p>
+                {displayVolumeDiagnostics && (
+                  <>
+                    <p className="sheet-note">Executed 3D Benchy volume diagnostics</p>
+                    <div
+                      className="transform-grid"
+                      aria-label="3D Benchy volume diagnostics"
+                    >
+                      <label>
+                        Quality / grid
+                        <strong>
+                          {displayVolumeDiagnostics.qualityTier} ·{" "}
+                          {displayVolumeDiagnostics.gridWidth}×
+                          {displayVolumeDiagnostics.gridHeight}×
+                          {displayVolumeDiagnostics.gridDepth}
+                        </strong>
+                      </label>
+                      <label>
+                        Voxel pitch
+                        <strong>
+                          {displayVolumeDiagnostics.voxelPitchUm
+                            .map((value) => value.toFixed(3))
+                            .join("×")} µm
+                        </strong>
+                      </label>
+                      <label title={displayVolumeDiagnostics.downgradeReason}>
+                        Owned / budget
+                        <strong>
+                          {formatMemory(displayVolumeDiagnostics.ownedMemoryBytes)} /{" "}
+                          {formatMemory(displayVolumeDiagnostics.memoryBudgetBytes)}
+                        </strong>
+                      </label>
+                      <label>
+                        PSF quadrature
+                        <strong>
+                          {displayVolumeDiagnostics.psfPupilSamples} rays ·{" "}
+                          {displayVolumeDiagnostics.psfKernelVoxels} voxels
+                        </strong>
+                      </label>
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
               <div className="parameter-list">
@@ -1557,6 +1676,7 @@ export default function Home() {
                 </div>
                 <code>|E|² = Debye(NA, λ, circular polarization)</code>
                 <code>dose ∝ |E|⁴ · P² / (f · τ)</code>
+                <code>∂ₜp = Dₚ∇²p − βsp</code>
                 <code>∂ₜr = Dᵣ∇²r + ηsp − (δ + qo)r − κr²</code>
                 <code>∂ₜo = Dₒ∇²o − χqor</code>
                 <code>∂ₜx = γr(1 − x)</code>
@@ -1589,7 +1709,7 @@ export default function Home() {
           <div className="comparison-heading">
             <div>
               <span className="eyebrow">Counterfactual branch</span>
-              <strong>Dₒ × 2 · same path / same seed</strong>
+              <strong>Dₒ sweep · same path / same seed</strong>
             </div>
             <div className="ab-toggle">
               <button
@@ -1653,7 +1773,8 @@ export default function Home() {
               <span>
                 Layer{" "}
                 <strong>
-                  {selectedLayer + 1}/{sliceInfo.layerCount}
+                  {selectedLayer + 1}/{sliceInfo.layerCount} · z{" "}
+                  {formatNumber(selectedLayerZ, 2)} µm
                 </strong>
               </span>
               <input
@@ -1668,7 +1789,10 @@ export default function Home() {
           )}
           <div className="integrity-readout">
             <span>
-              Δt <strong>{displayMetrics.timestepModel.toFixed(3)} T₀</strong>
+              volume gel{" "}
+              <strong>
+                {(displayMetrics.gelledFraction * 100).toFixed(1)}%
+              </strong>
             </span>
             <span>
               replay <strong>{displayMetrics.checksum}</strong>

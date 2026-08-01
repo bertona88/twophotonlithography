@@ -21,6 +21,10 @@ export const wholevolumesimulation_advance_exposure_steps: (a: number, b: number
 export const wholevolumesimulation_advance_development_steps: (a: number, b: number) => number;
 export const wholevolumesimulation_get_snapshot: (a: number) => number;
 export const wholevolumesimulation_snapshot_len: (a: number) => number;
+export const wholevolumesimulation_get_scan_path: (a: number) => number;
+export const wholevolumesimulation_scan_path_len: (a: number) => number;
+export const wholevolumesimulation_get_layer_positions: (a: number) => number;
+export const wholevolumesimulation_layer_positions_len: (a: number) => number;
 export const wholevolumesimulation_focus: (a: number, b: number) => void;
 export const wholevolumesimulation_exposure_progress: (a: number) => number;
 export const wholevolumesimulation_development_progress: (a: number) => number;

@@ -33,14 +33,21 @@ jobs:
         run: |
           set -euo pipefail
           archive="${RUNNER_TEMP}/wasm-pack.tar.gz"
+          archive_sha256="c539d91ccab2591a7e975bcf82c82e1911b03335c80aa83d67ad25ed2ad06539"
           cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
           install_root="${RUNNER_TEMP}/wasm-pack"
           curl --fail --location --silent --show-error \
+            --retry 8 \
+            --retry-all-errors \
+            --retry-delay 2 \
             https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz \
             --output "${archive}"
+          printf '%s  %s\n' "${archive_sha256}" "${archive}" | sha256sum --check -
           mkdir -p "${install_root}" "${cargo_home}/bin"
           tar -xzf "${archive}" --strip-components=1 -C "${install_root}"
           install -m 0755 "${install_root}/wasm-pack" "${cargo_home}/bin/wasm-pack"
           wasm-pack --version
       - run: npm run install:ci
       - run: npm test
+      - name: Verify pinned browser Wasm matches the reviewed Rust source
+        run: git diff --exit-code -- app/wasm/reaction_lens

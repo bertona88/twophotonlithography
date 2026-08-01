@@ -143,6 +143,24 @@ impl WholeVolumeSimulation {
         self.inner.snapshot_len() as u32
     }
 
+    /// Packed illuminated line segments in XYZXYZ order (f32 elements).
+    pub fn get_scan_path(&self) -> u32 {
+        self.inner.scan_path_segments().as_ptr() as u32
+    }
+
+    pub fn scan_path_len(&self) -> u32 {
+        self.inner.scan_path_segments().len() as u32
+    }
+
+    /// Physical Z coordinate of every emitted scan layer (f32 elements).
+    pub fn get_layer_positions(&self) -> u32 {
+        self.inner.layer_positions().as_ptr() as u32
+    }
+
+    pub fn layer_positions_len(&self) -> u32 {
+        self.inner.layer_positions().len() as u32
+    }
+
     pub fn focus(&self) -> Vec<f32> {
         self.inner.focus().to_vec()
     }

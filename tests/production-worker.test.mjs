@@ -130,9 +130,22 @@ test("production worker initializes browser Wasm and honors its message contract
       (message) => message.type === "sliceResult",
       "a queued slice result",
     );
-    assert.ok(sliceResult.lines instanceof ArrayBuffer);
-    assert.ok(sliceResult.nodes instanceof ArrayBuffer);
-    assert.ok(sliceResult.layerCount > 0);
+    assert.ok(sliceResult.pathPositions instanceof ArrayBuffer);
+    assert.ok(sliceResult.renderPositions instanceof ArrayBuffer);
+    assert.ok(sliceResult.layerPositions instanceof ArrayBuffer);
+    const pathPositions = new Float32Array(sliceResult.pathPositions);
+    const renderPositions = new Float32Array(sliceResult.renderPositions);
+    const layerPositions = new Float32Array(sliceResult.layerPositions);
+    assert.ok(pathPositions.length > 0);
+    assert.equal(pathPositions.length % 6, 0);
+    assert.ok(renderPositions.length > 0);
+    assert.equal(renderPositions.length % 3, 0);
+    assert.equal(sliceResult.layerCount, layerPositions.length);
+    assert.equal(sliceResult.passes, parameters.passes);
+    assert.ok(layerPositions.length > 0);
+    assert.ok(layerPositions.at(-1) > 17);
+    assert.ok(sliceResult.pathLengthUm > 0);
+    assert.ok(sliceResult.estimatedExposureSeconds > 0);
 
     const snapshot = await waitForMessage(
       worker,
@@ -143,6 +156,8 @@ test("production worker initializes browser Wasm and honors its message contract
     assert.equal(snapshot.lensHeight, GRID_HEIGHT);
     assert.equal(snapshot.lens.byteLength, CELL_COUNT * 4);
     assert.equal(snapshot.diagnostics.solver, "Rust/Wasm");
+    assert.deepEqual(snapshot.lensDiagnostics, snapshot.diagnostics);
+    assert.equal(snapshot.diagnostics.volume, undefined);
     assert.equal(snapshot.diagnostics.fieldCount, 6);
     assert.deepEqual(snapshot.diagnostics.fieldOrder, [
       "photoinitiator",
@@ -152,19 +167,86 @@ test("production worker initializes browser Wasm and honors its message contract
       "developer",
       "remainingMass",
     ]);
+    assert.ok(snapshot.volumeDiagnostics.gridDepth > 0);
+    assert.equal(
+      snapshot.volumeDiagnostics.layerCount,
+      sliceResult.layerCount,
+    );
+    assert.equal(
+      snapshot.volumeDiagnostics.pathLengthUm,
+      sliceResult.pathLengthUm,
+    );
+    assert.deepEqual(snapshot.volumeMetrics, snapshot.metrics);
+    for (const field of [
+      "oxygenMean",
+      "radicalMax",
+      "conversionMean",
+      "gelledFraction",
+      "survivingFraction",
+    ]) {
+      assert.equal(snapshot.metrics[field], snapshot.volumeDiagnostics[field]);
+    }
+    assert.equal(snapshot.lensMetrics.cellSizeNm, 135);
+    assert.ok(Math.abs(snapshot.metrics.pulseEnergyPj - 200) < 1e-9);
+    assert.ok(Math.abs(snapshot.metrics.peakPowerW - 2000) < 1e-9);
+    assert.ok(snapshot.lensDiagnostics.ownedMemoryBytes > 0);
+    assert.ok(
+      snapshot.lensDiagnostics.wasmMemoryBytes >
+        snapshot.lensDiagnostics.ownedMemoryBytes,
+    );
 
-    worker.postMessage({
-      type: "slice",
-      params: { ...parameters, hatchSpacing: Number.MIN_VALUE },
-    });
-    const commandError = await waitForMessage(
+    for (const [patch, pattern] of [
+      [{ hatchSpacing: Number.MIN_VALUE }, /hatchSpacing/i],
+      [{ layerHeight: 0.24 }, /layerHeight/i],
+      [{ contourCount: 1.5 }, /contourCount/i],
+    ]) {
+      const commandError = await postAndWait(
+        worker,
+        { type: "slice", params: { ...parameters, ...patch } },
+        (message) =>
+          message.type === "commandError" && message.command === "slice",
+        `a validation error matching ${pattern}`,
+      );
+      assert.match(commandError.message, pattern);
+      assert.equal(commandError.stage, "ready");
+    }
+
+    const configuredSlicePromise = waitForMessage(
       worker,
       (message) =>
-        message.type === "commandError" && message.command === "slice",
-      "a validation error for unsafe hatch spacing",
+        message.type === "sliceResult" &&
+        message.sequence > sliceResult.sequence,
+      "a configure-triggered toolpath refresh",
     );
-    assert.match(commandError.message, /hatchSpacing/i);
-    assert.equal(commandError.stage, "ready");
+    const configuredSnapshotPromise = waitForMessage(
+      worker,
+      (message) =>
+        message.type === "snapshot" && message.sequence > snapshot.sequence,
+      "the snapshot following a configure-triggered refresh",
+    );
+    worker.postMessage({
+      type: "configure",
+      params: { ...parameters, layerHeight: 0.8, speed: 60 },
+    });
+    const [configuredSlice, configuredSnapshot] = await Promise.all([
+      configuredSlicePromise,
+      configuredSnapshotPromise,
+    ]);
+    assert.ok(new Float32Array(configuredSlice.pathPositions).length > 0);
+    assert.equal(
+      configuredSlice.layerCount,
+      new Float32Array(configuredSlice.layerPositions).length,
+    );
+    assert.notEqual(
+      configuredSlice.layerCount,
+      sliceResult.layerCount,
+      "a changed layer height must refresh the authoritative layers",
+    );
+    assert.notEqual(
+      configuredSlice.estimatedExposureSeconds,
+      sliceResult.estimatedExposureSeconds,
+      "a changed speed must refresh the authoritative exposure estimate",
+    );
 
     const exposing = await postAndWait(
       worker,
@@ -212,6 +294,37 @@ test("production worker initializes browser Wasm and honors its message contract
       exposureComplete.diagnostics.exposureStep,
       exposureComplete.diagnostics.exposureStepsTotal,
     );
+    const completedLens = new Uint8Array(exposureComplete.lens);
+    let encodedLensOxygenMean = 0;
+    let encodedLensConversionMean = 0;
+    for (let index = 0; index < CELL_COUNT; index += 1) {
+      encodedLensOxygenMean += completedLens[index * 4] / 255;
+      encodedLensConversionMean += completedLens[index * 4 + 2] / 255;
+    }
+    encodedLensOxygenMean /= CELL_COUNT;
+    encodedLensConversionMean /= CELL_COUNT;
+    assert.ok(
+      Math.abs(
+        exposureComplete.lensMetrics.oxygenMean - encodedLensOxygenMean,
+      ) <= 1 / 255,
+    );
+    assert.ok(
+      Math.abs(
+        exposureComplete.lensMetrics.conversionMean -
+          encodedLensConversionMean,
+      ) <= 1 / 255,
+    );
+    assert.ok(
+      Math.abs(
+        exposureComplete.lensMetrics.oxygenMean -
+          exposureComplete.volumeMetrics.oxygenMean,
+      ) > 1e-6 ||
+        Math.abs(
+          exposureComplete.lensMetrics.conversionMean -
+            exposureComplete.volumeMetrics.conversionMean,
+        ) > 1e-6,
+      "2D lens chemistry must remain distinct from 3D volume chemistry",
+    );
 
     await postAndWait(
       worker,
@@ -231,6 +344,19 @@ test("production worker initializes browser Wasm and honors its message contract
       developed.diagnostics.developmentStep,
       developed.diagnostics.developmentStepsTotal,
     );
+    assert.equal(
+      developed.volumeDiagnostics.developmentStep,
+      developed.volumeDiagnostics.developmentStepsTotal,
+    );
+    assert.notEqual(
+      developed.diagnostics.developmentStepsTotal,
+      developed.volumeDiagnostics.developmentStepsTotal,
+      "the regression must exercise independently sized development schedules",
+    );
+    assert.equal(
+      developed.metrics.survivingFraction,
+      developed.volumeDiagnostics.survivingFraction,
+    );
     assert.ok(developed.metrics.survivingFraction < 1);
 
     const reset = await postAndWait(
@@ -243,7 +369,7 @@ test("production worker initializes browser Wasm and honors its message contract
         message.developmentProgress === 0,
       "a reset snapshot",
     );
-    assert.equal(reset.metrics.checksum, snapshot.metrics.checksum);
+    assert.equal(reset.metrics.checksum, configuredSnapshot.metrics.checksum);
   } finally {
     await worker.terminate();
   }

@@ -264,10 +264,33 @@ export class WholeVolumeSimulation {
         }
     }
     /**
+     * Physical Z coordinate of every emitted scan layer (f32 elements).
+     * @returns {number}
+     */
+    get_layer_positions() {
+        const ret = wasm.wholevolumesimulation_get_layer_positions(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * Packed illuminated line segments in XYZXYZ order (f32 elements).
+     * @returns {number}
+     */
+    get_scan_path() {
+        const ret = wasm.wholevolumesimulation_get_scan_path(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
      * @returns {number}
      */
     get_snapshot() {
         const ret = wasm.wholevolumesimulation_get_snapshot(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    layer_positions_len() {
+        const ret = wasm.wholevolumesimulation_layer_positions_len(this.__wbg_ptr);
         return ret >>> 0;
     }
     /**
@@ -295,6 +318,13 @@ export class WholeVolumeSimulation {
     }
     reset() {
         wasm.wholevolumesimulation_reset(this.__wbg_ptr);
+    }
+    /**
+     * @returns {number}
+     */
+    scan_path_len() {
+        const ret = wasm.wholevolumesimulation_scan_path_len(this.__wbg_ptr);
+        return ret >>> 0;
     }
     /**
      * @param {any} parameters

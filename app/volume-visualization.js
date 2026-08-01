@@ -29,6 +29,34 @@ export function voxelActivity(
   return clamp01((conversion - 0.012) / 0.32);
 }
 
+/**
+ * Return an even vertex count so THREE.LineSegments never draws half of the
+ * next authoritative scan segment while exposure progress advances.
+ *
+ * @param {number} vertexCount
+ * @param {number} progress
+ * @returns {number}
+ */
+export function lineSegmentDrawCount(vertexCount, progress) {
+  const boundedVertexCount = Math.max(0, Math.floor(vertexCount));
+  const completeVertexCount = boundedVertexCount - (boundedVertexCount % 2);
+  return (
+    Math.floor((completeVertexCount * clamp01(progress)) / 2) * 2
+  );
+}
+
+/**
+ * Convert total scheduled exposure progress into progress along the one-pass
+ * path shown in the viewport.
+ *
+ * @param {number} exposureProgress
+ * @param {number} passes
+ * @returns {number}
+ */
+export function multipassPathProgress(exposureProgress, passes) {
+  return clamp01(exposureProgress * Math.max(1, passes));
+}
+
 function clamp01(value) {
   return Math.min(1, Math.max(0, value));
 }

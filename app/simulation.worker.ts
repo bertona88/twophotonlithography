@@ -64,8 +64,17 @@ const SNAPSHOT_LEN = GRID_N * SNAPSHOT_FIELD_COUNT;
 const DT_MODEL = 0.016;
 const SEED = 0x07a1;
 const MAX_PENDING_MESSAGES = 64;
+const MIN_LAYER_HEIGHT_UM = 0.25;
 const MIN_HATCH_SPACING_UM = 0.25;
-const MAX_HATCH_LINES_PER_REGION = 256;
+const LENS_CELL_SIZE_NM = Math.round((15 / (GRID_W - 1)) * 1000);
+const TOOLPATH_PARAMETER_KEYS = [
+  "layerHeight",
+  "hatchSpacing",
+  "hatchAngle",
+  "contourCount",
+  "passes",
+  "speed",
+] as const satisfies readonly (keyof ModelParams)[];
 
 type SolverState = "initializing" | "ready" | "error";
 
@@ -110,12 +119,35 @@ type VolumeDiagnostics = {
   psfPupilSamples: number;
   psfKernelVoxels: number;
   scanPoints: number;
+  layerCount: number;
+  pathLengthUm: number;
+  estimatedExposureSeconds: number;
   exposureStep: number;
   exposureStepsTotal: number;
   developmentStep: number;
   developmentStepsTotal: number;
   simulatedTimeSeconds: number;
+  oxygenMean: number;
+  radicalMax: number;
+  conversionMean: number;
+  gelledFraction: number;
+  survivingFraction: number;
   checksum: string;
+};
+
+type VolumeGeometryExports = WholeVolumeSimulation & {
+  get_scan_path(): number;
+  scan_path_len(): number;
+  get_layer_positions(): number;
+  layer_positions_len(): number;
+};
+
+type VolumeSnapshot = {
+  diagnostics: VolumeDiagnostics;
+  conversion: Uint8Array;
+  oxygen: Uint8Array;
+  radicals: Uint8Array;
+  remaining: Uint8Array;
 };
 
 let params: ModelParams;
@@ -126,7 +158,6 @@ let exposureStep = 0;
 let exposureStepsTotal = 1;
 let developmentStep = 0;
 let developmentStepsTotal = 1;
-let pathLength = 0;
 let lensSimulation: ReactionLensSimulation | null = null;
 let volumeSimulation: WholeVolumeSimulation | null = null;
 let benchyOccupancy: Uint8Array | null = null;
@@ -139,11 +170,8 @@ let rateWindowUpdates = 0;
 let updatesPerSecond = 0;
 
 let linePositions = new Float32Array(0);
+let layerPositions = new Float32Array(0);
 let macroPositions = new Float32Array(0);
-let volumeConversion = new Uint8Array(0);
-let volumeOxygen = new Uint8Array(0);
-let volumeRadicals = new Uint8Array(0);
-let volumeRemaining = new Uint8Array(0);
 
 function clamp(value: number, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value));
@@ -179,20 +207,36 @@ function validateWorkerParameters(next: ModelParams) {
       throw new Error(`${name} must be finite`);
     }
   }
-  if (next.layerHeight <= 0) {
-    throw new Error("layerHeight must be greater than zero");
+  if (next.layerHeight < MIN_LAYER_HEIGHT_UM) {
+    throw new Error(
+      `layerHeight must be at least ${MIN_LAYER_HEIGHT_UM} µm`,
+    );
   }
   if (next.hatchSpacing < MIN_HATCH_SPACING_UM) {
     throw new Error(
       `hatchSpacing must be at least ${MIN_HATCH_SPACING_UM} µm`,
     );
   }
-  if (next.contourCount < 0) {
-    throw new Error("contourCount must not be negative");
+  if (
+    !Number.isInteger(next.contourCount) ||
+    next.contourCount < 0 ||
+    next.contourCount > 64
+  ) {
+    throw new Error(
+      "contourCount must be a whole number between zero and 64",
+    );
   }
-  if (next.contourCount > 64) {
-    throw new Error("contourCount must not exceed 64");
+  if (!Number.isInteger(next.passes) || next.passes < 1 || next.passes > 3) {
+    throw new Error("passes must be a whole number between one and three");
   }
+}
+
+function toolpathParametersChanged(next: ModelParams) {
+  return (
+    !params ||
+    linePositions.length === 0 ||
+    TOOLPATH_PARAMETER_KEYS.some((key) => params[key] !== next[key])
+  );
 }
 
 function requireLensSimulation() {
@@ -302,190 +346,58 @@ function normalizedDiagnostics(raw: RustDiagnostics) {
   };
 }
 
-function distance3(
-  ax: number,
-  ay: number,
-  az: number,
-  bx: number,
-  by: number,
-  bz: number,
+function copyWasmFloat32Export(
+  pointer: number,
+  length: number,
+  label: string,
 ) {
-  return Math.hypot(ax - bx, ay - by, az - bz);
-}
-
-function hatchLineBudget(radius: number, spacing: number) {
-  const budget = Math.ceil((radius * 2) / spacing) + 2;
+  if (!wasmMemory) {
+    throw new Error("Rust/Wasm memory is unavailable");
+  }
+  if (!Number.isSafeInteger(pointer) || pointer < 0) {
+    throw new Error(`Rust/Wasm ${label} has an invalid pointer`);
+  }
+  if (pointer % Float32Array.BYTES_PER_ELEMENT !== 0) {
+    throw new Error(`Rust/Wasm ${label} pointer is not f32-aligned`);
+  }
+  if (!Number.isSafeInteger(length) || length < 0) {
+    throw new Error(`Rust/Wasm ${label} has an invalid length`);
+  }
+  const byteLength = length * Float32Array.BYTES_PER_ELEMENT;
   if (
-    !Number.isSafeInteger(budget) ||
-    budget < 1 ||
-    budget > MAX_HATCH_LINES_PER_REGION
+    !Number.isSafeInteger(byteLength) ||
+    !Number.isSafeInteger(pointer + byteLength) ||
+    pointer + byteLength > wasmMemory.buffer.byteLength
   ) {
+    throw new Error(`Rust/Wasm ${label} points outside linear memory`);
+  }
+  return new Float32Array(wasmMemory.buffer, pointer, length).slice();
+}
+
+function readVolumeGeometry(diagnostics: VolumeDiagnostics) {
+  const volume = requireVolumeSimulation() as VolumeGeometryExports;
+  const scanPathPointer = volume.get_scan_path();
+  linePositions = copyWasmFloat32Export(
+    scanPathPointer,
+    volume.scan_path_len(),
+    "scan path",
+  );
+  if (linePositions.length % 6 !== 0) {
     throw new Error(
-      `Hatch region requires an unsupported number of lines (${budget})`,
+      "Rust/Wasm scan path does not contain packed XYZ line segments",
     );
   }
-  return budget;
-}
 
-function addSegment(
-  lines: number[],
-  nodes: number[],
-  a: [number, number, number],
-  b: [number, number, number],
-) {
-  lines.push(...a, ...b);
-  const length = distance3(...a, ...b);
-  pathLength += length;
-  const count = Math.max(1, Math.ceil(length / 0.55));
-  for (let index = 0; index <= count; index += 1) {
-    const t = index / count;
-    nodes.push(
-      a[0] + (b[0] - a[0]) * t,
-      a[1] + (b[1] - a[1]) * t,
-      a[2] + (b[2] - a[2]) * t,
+  const layerPositionsPointer = volume.get_layer_positions();
+  layerPositions = copyWasmFloat32Export(
+    layerPositionsPointer,
+    volume.layer_positions_len(),
+    "layer positions",
+  );
+  if (layerPositions.length !== diagnostics.layerCount) {
+    throw new Error(
+      `Rust/Wasm exported ${layerPositions.length} layer positions for ${diagnostics.layerCount} diagnostic layers`,
     );
-  }
-}
-
-function addLoop(
-  lines: number[],
-  nodes: number[],
-  points: [number, number, number][],
-) {
-  for (let index = 0; index < points.length; index += 1) {
-    addSegment(lines, nodes, points[index], points[(index + 1) % points.length]);
-  }
-}
-
-function addEllipse(
-  lines: number[],
-  nodes: number[],
-  cx: number,
-  cy: number,
-  rx: number,
-  ry: number,
-  z: number,
-  points = 42,
-) {
-  const loop: [number, number, number][] = [];
-  for (let index = 0; index < points; index += 1) {
-    const angle = (index / points) * Math.PI * 2;
-    loop.push([cx + Math.cos(angle) * rx, cy + Math.sin(angle) * ry, z]);
-  }
-  addLoop(lines, nodes, loop);
-}
-
-function addRectangle(
-  lines: number[],
-  nodes: number[],
-  x0: number,
-  x1: number,
-  y0: number,
-  y1: number,
-  z: number,
-) {
-  addLoop(lines, nodes, [
-    [x0, y0, z],
-    [x1, y0, z],
-    [x1, y1, z],
-    [x0, y1, z],
-  ]);
-}
-
-function hatchEllipse(
-  lines: number[],
-  nodes: number[],
-  cx: number,
-  cy: number,
-  rx: number,
-  ry: number,
-  z: number,
-  spacing: number,
-  angleDegrees: number,
-) {
-  const angle = (angleDegrees * Math.PI) / 180;
-  const ux = Math.cos(angle);
-  const uy = Math.sin(angle);
-  const vx = -uy;
-  const vy = ux;
-  const radius = Math.hypot(rx, ry);
-  const lineBudget = hatchLineBudget(radius, spacing);
-  let lineCount = 0;
-
-  for (let offset = -radius; offset <= radius; offset += spacing) {
-    if (lineCount >= lineBudget) {
-      throw new Error("Hatch ellipse exceeded its bounded line budget");
-    }
-    lineCount += 1;
-    let start: [number, number, number] | null = null;
-    let previous: [number, number, number] | null = null;
-    const samples = 90;
-    for (let sample = 0; sample <= samples; sample += 1) {
-      const along = -radius + (sample / samples) * radius * 2;
-      const px = cx + ux * along + vx * offset;
-      const py = cy + uy * along + vy * offset;
-      const inside =
-        ((px - cx) * (px - cx)) / (rx * rx) +
-          ((py - cy) * (py - cy)) / (ry * ry) <=
-        1;
-      if (inside && start === null) {
-        start = [px, py, z];
-      }
-      if (inside) {
-        previous = [px, py, z];
-      }
-      if ((!inside || sample === samples) && start && previous) {
-        addSegment(lines, nodes, start, previous);
-        start = null;
-        previous = null;
-      }
-    }
-  }
-}
-
-function hatchRectangle(
-  lines: number[],
-  nodes: number[],
-  x0: number,
-  x1: number,
-  y0: number,
-  y1: number,
-  z: number,
-  spacing: number,
-  angleDegrees: number,
-) {
-  const angle = ((angleDegrees % 180) * Math.PI) / 180;
-  const ux = Math.cos(angle);
-  const uy = Math.sin(angle);
-  const vx = -uy;
-  const vy = ux;
-  const cx = (x0 + x1) / 2;
-  const cy = (y0 + y1) / 2;
-  const radius = Math.hypot(x1 - x0, y1 - y0) / 2;
-  const lineBudget = hatchLineBudget(radius, spacing);
-  let lineCount = 0;
-
-  for (let offset = -radius; offset <= radius; offset += spacing) {
-    if (lineCount >= lineBudget) {
-      throw new Error("Hatch rectangle exceeded its bounded line budget");
-    }
-    lineCount += 1;
-    let start: [number, number, number] | null = null;
-    let previous: [number, number, number] | null = null;
-    const samples = 96;
-    for (let sample = 0; sample <= samples; sample += 1) {
-      const along = -radius + (sample / samples) * radius * 2;
-      const px = cx + ux * along + vx * offset;
-      const py = cy + uy * along + vy * offset;
-      const inside = px >= x0 && px <= x1 && py >= y0 && py <= y1;
-      if (inside && start === null) start = [px, py, z];
-      if (inside) previous = [px, py, z];
-      if ((!inside || sample === samples) && start && previous) {
-        addSegment(lines, nodes, start, previous);
-        start = null;
-        previous = null;
-      }
-    }
   }
 }
 
@@ -493,143 +405,31 @@ function sliceBenchy(next: ModelParams) {
   applyLensParameters(next);
   params = next;
   stage = "slicing";
-  pathLength = 0;
-  const lines: number[] = [];
-  const nodes: number[] = [];
-  const layerCount = Math.max(
-    8,
-    Math.min(72, Math.floor(12.7 / params.layerHeight) + 1),
-  );
-
-  for (let layer = 0; layer < layerCount; layer += 1) {
-    const z = layer * params.layerHeight + 0.18;
-    const hatchAngle = params.hatchAngle + (layer % 2) * 90;
-
-    if (z < 4.7) {
-      const normalized = clamp(z / 4.7);
-      const rx = 9.2 + 1.6 * normalized;
-      const ry = 2.4 + 2.0 * normalized;
-      const cx = -0.65 + normalized * 0.45;
-      for (let contour = 0; contour < params.contourCount; contour += 1) {
-        const inset = contour * 0.2;
-        addEllipse(lines, nodes, cx, 0, rx - inset, ry - inset, z);
-      }
-      hatchEllipse(
-        lines,
-        nodes,
-        cx,
-        0,
-        rx - params.contourCount * 0.22,
-        ry - params.contourCount * 0.22,
-        z,
-        params.hatchSpacing,
-        hatchAngle,
-      );
-    } else if (z < 5.35) {
-      addEllipse(lines, nodes, -0.2, 0, 10.6, 4.35, z);
-      hatchEllipse(
-        lines,
-        nodes,
-        -0.2,
-        0,
-        10.1,
-        3.9,
-        z,
-        params.hatchSpacing,
-        hatchAngle,
-      );
-    } else if (z < 8.9) {
-      addRectangle(lines, nodes, -2.5, 6.7, -3.25, 3.25, z);
-      const wall = Math.max(0.45, params.hatchSpacing);
-      hatchRectangle(
-        lines,
-        nodes,
-        -2.5,
-        6.7,
-        -3.25,
-        -3.25 + wall,
-        z,
-        params.hatchSpacing,
-        hatchAngle,
-      );
-      hatchRectangle(
-        lines,
-        nodes,
-        -2.5,
-        6.7,
-        3.25 - wall,
-        3.25,
-        z,
-        params.hatchSpacing,
-        hatchAngle,
-      );
-      hatchRectangle(
-        lines,
-        nodes,
-        -2.5,
-        -2.5 + wall,
-        -3.25,
-        3.25,
-        z,
-        params.hatchSpacing,
-        hatchAngle + 90,
-      );
-    } else if (z < 9.6) {
-      addRectangle(lines, nodes, -3.25, 7.5, -3.8, 3.8, z);
-      hatchRectangle(
-        lines,
-        nodes,
-        -3.25,
-        7.5,
-        -3.8,
-        3.8,
-        z,
-        params.hatchSpacing,
-        hatchAngle,
-      );
-    } else if (z < 12.7) {
-      addEllipse(lines, nodes, 4.1, 0, 1.35, 1.35, z, 30);
-      addEllipse(lines, nodes, 4.1, 0, 0.72, 0.72, z, 24);
-    }
-  }
-
-  linePositions = new Float32Array(lines);
-  const rawNodeCount = Math.floor(nodes.length / 3);
-  const maximumMacroNodes = 6000;
-  if (rawNodeCount > maximumMacroNodes) {
-    const sampled = new Float32Array(maximumMacroNodes * 3);
-    for (let index = 0; index < maximumMacroNodes; index += 1) {
-      const sourceIndex = Math.floor(
-        (index / (maximumMacroNodes - 1)) * (rawNodeCount - 1),
-      );
-      sampled[index * 3] = nodes[sourceIndex * 3];
-      sampled[index * 3 + 1] = nodes[sourceIndex * 3 + 1];
-      sampled[index * 3 + 2] = nodes[sourceIndex * 3 + 2];
-    }
-    macroPositions = sampled;
-  } else {
-    macroPositions = new Float32Array(nodes);
-  }
   resetFields();
+  const volumeSnapshot = readVolumeSnapshot();
+  const { diagnostics: volumeDiagnostics } = volumeSnapshot;
+  readVolumeGeometry(volumeDiagnostics);
   stage = "ready";
   sequence += 1;
 
-  const lineExport = linePositions.slice();
-  const nodeExport = macroPositions.slice();
+  const pathExport = linePositions.slice();
+  const renderExport = macroPositions.slice();
+  const layerExport = layerPositions.slice();
   post(
     {
       type: "sliceResult",
       sequence,
-      lines: lineExport.buffer,
-      nodes: nodeExport.buffer,
-      layerCount,
-      pathLength,
-      estimatedSeconds:
-        (pathLength * Math.max(1, params.passes)) / Math.max(1, params.speed),
+      pathPositions: pathExport.buffer,
+      renderPositions: renderExport.buffer,
+      layerPositions: layerExport.buffer,
+      layerCount: volumeDiagnostics.layerCount,
+      passes: params.passes,
+      pathLengthUm: volumeDiagnostics.pathLengthUm,
+      estimatedExposureSeconds: volumeDiagnostics.estimatedExposureSeconds,
     },
-    [lineExport.buffer, nodeExport.buffer],
+    [pathExport.buffer, renderExport.buffer, layerExport.buffer],
   );
-  emitSnapshot();
+  emitSnapshot(volumeSnapshot);
 }
 
 function resetFields() {
@@ -643,8 +443,8 @@ function resetFields() {
   const simulation = requireLensSimulation();
   simulation.set_exposure_steps_total(exposureStepsTotal);
   simulation.reset(SEED);
-  readVolumeSnapshot(true);
   resetUpdateRate();
+  return volumeDiagnostics;
 }
 
 function runExposureBatch() {
@@ -674,9 +474,21 @@ function runDevelopmentBatch() {
   );
   const advancedSteps =
     requireVolumeSimulation().advance_development_steps(requestedSteps);
-  requireLensSimulation().advance_development_steps(advancedSteps);
   developmentStep += advancedSteps;
-  recordSimulationUpdates(advancedSteps);
+  const volumeDevelopmentProgress =
+    developmentStep / Math.max(1, developmentStepsTotal);
+  const lens = requireLensSimulation();
+  const lensDiagnostics = lens.get_diagnostics() as RustDiagnostics;
+  const lensDevelopmentTarget =
+    developmentStep >= developmentStepsTotal
+      ? lensDiagnostics.developmentStepsTotal
+      : Math.floor(
+          volumeDevelopmentProgress * lensDiagnostics.developmentStepsTotal,
+        );
+  const lensAdvancedSteps = lens.advance_development_steps(
+    Math.max(0, lensDevelopmentTarget - lensDiagnostics.developmentStep),
+  );
+  recordSimulationUpdates(lensAdvancedSteps);
 
   if (developmentStep >= developmentStepsTotal) {
     stage = "complete";
@@ -806,7 +618,7 @@ function readLensSnapshot() {
   };
 }
 
-function readVolumeSnapshot(rebuildPath = false) {
+function readVolumeSnapshot() {
   const volume = requireVolumeSimulation();
   if (!wasmMemory) {
     throw new Error("Rust/Wasm memory is unavailable");
@@ -822,69 +634,65 @@ function readVolumeSnapshot(rebuildPath = false) {
   }
   const packed = new Float32Array(memoryBuffer, pointer, snapshotLength);
   const count = snapshotLength / 7;
-  macroPositions = new Float32Array(count * 3);
-  volumeConversion = new Uint8Array(count);
-  volumeOxygen = new Uint8Array(count);
-  volumeRadicals = new Uint8Array(count);
-  volumeRemaining = new Uint8Array(count);
+  const refreshPositions = macroPositions.length !== count * 3;
+  if (refreshPositions) {
+    macroPositions = new Float32Array(count * 3);
+  }
+  const conversion = new Uint8Array(count);
+  const oxygen = new Uint8Array(count);
+  const radicals = new Uint8Array(count);
+  const remaining = new Uint8Array(count);
   for (let index = 0; index < count; index += 1) {
     const source = index * 7;
-    const target = index * 3;
-    macroPositions[target] = packed[source];
-    macroPositions[target + 1] = packed[source + 1];
-    macroPositions[target + 2] = packed[source + 2];
-    volumeConversion[index] = Math.round(clamp(packed[source + 3]) * 255);
-    volumeOxygen[index] = Math.round(clamp(packed[source + 4]) * 255);
-    volumeRadicals[index] = Math.round(clamp(packed[source + 5]) * 255);
-    volumeRemaining[index] = Math.round(clamp(packed[source + 6]) * 255);
+    if (refreshPositions) {
+      const target = index * 3;
+      macroPositions[target] = packed[source];
+      macroPositions[target + 1] = packed[source + 1];
+      macroPositions[target + 2] = packed[source + 2];
+    }
+    conversion[index] = Math.round(clamp(packed[source + 3]) * 255);
+    oxygen[index] = Math.round(clamp(packed[source + 4]) * 255);
+    radicals[index] = Math.round(clamp(packed[source + 5]) * 255);
+    remaining[index] = Math.round(clamp(packed[source + 6]) * 255);
   }
 
-  const diagnostics = volume.get_diagnostics() as VolumeDiagnostics;
-  if (rebuildPath) {
-    const lines: number[] = [];
-    const stride = Math.max(1, Math.ceil(count / 14_000));
-    for (let index = stride; index < count; index += stride) {
-      const previous = (index - stride) * 3;
-      const current = index * 3;
-      const distance = distance3(
-        macroPositions[previous],
-        macroPositions[previous + 1],
-        macroPositions[previous + 2],
-        macroPositions[current],
-        macroPositions[current + 1],
-        macroPositions[current + 2],
-      );
-      if (distance <= Math.max(...diagnostics.voxelPitchUm) * (stride + 1) * 2.2) {
-        lines.push(
-          macroPositions[previous],
-          macroPositions[previous + 1],
-          macroPositions[previous + 2],
-          macroPositions[current],
-          macroPositions[current + 1],
-          macroPositions[current + 2],
-        );
-      }
-    }
-    linePositions = new Float32Array(lines);
-    pathLength =
-      diagnostics.scanPoints * Math.min(...diagnostics.voxelPitchUm);
-  }
-  return diagnostics;
+  return {
+    diagnostics: volume.get_diagnostics() as VolumeDiagnostics,
+    conversion,
+    oxygen,
+    radicals,
+    remaining,
+  };
 }
 
-function emitSnapshot() {
+function emitSnapshot(volumeSnapshot?: VolumeSnapshot) {
   const { lens, diagnostics, lensStatistics } = readLensSnapshot();
-  const volumeDiagnostics = readVolumeSnapshot();
-  const conversion = volumeConversion.slice();
-  const oxygen = volumeOxygen.slice();
-  const radicals = volumeRadicals.slice();
-  const remaining = volumeRemaining.slice();
+  const currentVolumeSnapshot = volumeSnapshot ?? readVolumeSnapshot();
+  const {
+    diagnostics: volumeDiagnostics,
+    conversion,
+    oxygen,
+    radicals,
+    remaining,
+  } = currentVolumeSnapshot;
   const exposureProgress = requireVolumeSimulation().exposure_progress();
   const developmentProgress = requireVolumeSimulation().development_progress();
   const focus = Array.from(requireVolumeSimulation().focus());
 
   const pulseEnergyPj =
     (params.power * 1e-3) / (params.repetitionRate * 1e6) / 1e-12;
+  const volumeMetrics = {
+    oxygenMean: volumeDiagnostics.oxygenMean,
+    radicalMax: volumeDiagnostics.radicalMax,
+    conversionMean: volumeDiagnostics.conversionMean,
+    gelledFraction: volumeDiagnostics.gelledFraction,
+    survivingFraction: volumeDiagnostics.survivingFraction,
+    pulseEnergyPj,
+    peakPowerW:
+      pulseEnergyPj * 1e-12 / Math.max(1e-15, params.pulseDuration * 1e-15),
+    checksum: volumeDiagnostics.checksum,
+    cellSizeNm: Math.round(Math.min(...volumeDiagnostics.voxelPitchUm) * 1000),
+  };
 
   post(
     {
@@ -902,25 +710,16 @@ function emitSnapshot() {
       oxygen: oxygen.buffer,
       radicals: radicals.buffer,
       remaining: remaining.buffer,
-      diagnostics: {
-        ...diagnostics,
-        exposureStep: volumeDiagnostics.exposureStep,
-        exposureStepsTotal: volumeDiagnostics.exposureStepsTotal,
-        developmentStep: volumeDiagnostics.developmentStep,
-        developmentStepsTotal: volumeDiagnostics.developmentStepsTotal,
-        simulatedTimeSeconds: volumeDiagnostics.simulatedTimeSeconds,
-        volume: volumeDiagnostics,
-        checksum: volumeDiagnostics.checksum,
-      },
-      metrics: {
+      diagnostics,
+      lensDiagnostics: diagnostics,
+      volumeDiagnostics,
+      lensMetrics: {
         ...lensStatistics,
-        pulseEnergyPj,
-        peakPowerW:
-          pulseEnergyPj * 1e-12 / Math.max(1e-15, params.pulseDuration * 1e-15),
-        checksum: volumeDiagnostics.checksum,
-        cellSizeNm: Math.round(Math.min(...volumeDiagnostics.voxelPitchUm) * 1000),
+        cellSizeNm: LENS_CELL_SIZE_NM,
         timestepModel: diagnostics.timestepModel,
       },
+      metrics: volumeMetrics,
+      volumeMetrics,
     },
     [
       lens.buffer,
@@ -940,6 +739,10 @@ function processMessage(message: Incoming) {
   }
   if (message.type === "configure") {
     stopTimer();
+    if (toolpathParametersChanged(message.params)) {
+      sliceBenchy(message.params);
+      return;
+    }
     applyLensParameters(message.params);
     params = message.params;
     resetFields();
@@ -1057,6 +860,7 @@ async function initializeSolver() {
         timestepModel: DT_MODEL,
         updatesPerSecond: 0,
         simulatedModelTime: 0,
+        ownedMemoryBytes: 0,
         wasmMemoryBytes: memory.buffer.byteLength,
         checksum: "00000000",
       },

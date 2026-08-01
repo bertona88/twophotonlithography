@@ -4,7 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { initializeRenderer } from "./renderer-initialization";
-import { voxelActivity } from "./volume-visualization";
+import {
+  lineSegmentDrawCount,
+  voxelActivity,
+} from "./volume-visualization";
 
 export type FieldMode = "conversion" | "oxygen" | "radicals" | "development";
 
@@ -17,8 +20,7 @@ type LabViewportProps = {
   remaining: Uint8Array | null;
   focus: [number, number, number];
   progress: number;
-  selectedLayer: number;
-  layerHeight: number;
+  selectedLayerZ: number;
   voxelPitch: [number, number, number];
   fieldMode: FieldMode;
   stage: string;
@@ -327,8 +329,7 @@ export default function LabViewport({
   remaining,
   focus,
   progress,
-  selectedLayer,
-  layerHeight,
+  selectedLayerZ,
   voxelPitch,
   fieldMode,
 }: LabViewportProps) {
@@ -392,11 +393,8 @@ export default function LabViewport({
     );
     handles.path.geometry.dispose();
     handles.path.geometry = geometry;
-    handles.path.geometry.setDrawRange(
-      0,
-      Math.max(0, Math.floor(pathPositions.length * progress)),
-    );
-  }, [pathPositions, progress]);
+    handles.path.geometry.setDrawRange(0, 0);
+  }, [pathPositions]);
 
   useEffect(() => {
     const handles = handlesRef.current;
@@ -488,18 +486,26 @@ export default function LabViewport({
     if (!handles) return;
     handles.path.geometry.setDrawRange(
       0,
-      Math.floor((handles.path.geometry.getAttribute("position")?.count ?? 0) * progress),
+      lineSegmentDrawCount(
+        handles.path.geometry.getAttribute("position")?.count ?? 0,
+        progress,
+      ),
     );
-    handles.focus.position.set(...focus);
-    handles.lensBox.position.set(...focus);
-    handles.beam.position.set(focus[0], focus[1], focus[2] + 8.5);
-  }, [focus, progress]);
+  }, [pathPositions, progress]);
 
   useEffect(() => {
     const handles = handlesRef.current;
     if (!handles) return;
-    handles.membrane.position.z = selectedLayer * layerHeight + 0.18;
-  }, [selectedLayer, layerHeight]);
+    handles.focus.position.set(...focus);
+    handles.lensBox.position.set(...focus);
+    handles.beam.position.set(focus[0], focus[1], focus[2] + 8.5);
+  }, [focus]);
+
+  useEffect(() => {
+    const handles = handlesRef.current;
+    if (!handles) return;
+    handles.membrane.position.z = selectedLayerZ;
+  }, [selectedLayerZ]);
 
   return (
     <div

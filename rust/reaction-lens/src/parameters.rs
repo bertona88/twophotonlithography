@@ -10,6 +10,7 @@ use crate::simulation::{
 
 pub(crate) const MAX_EXPOSURE_STEPS_TOTAL: u32 = 10_000_000;
 const MAX_EXPLICIT_DIFFUSION_COURANT: f64 = 0.5;
+const MIN_SLICER_SPACING_UM: f64 = 0.25;
 
 fn default_layer_height() -> f64 {
     0.48
@@ -130,10 +131,25 @@ impl Default for Parameters {
 impl Parameters {
     /// Reject values that cannot be evolved safely by the explicit solver.
     pub fn validate(&self) -> Result<(), ValidationError> {
-        positive("layerHeight", self.layer_height)?;
-        positive("hatchSpacing", self.hatch_spacing)?;
+        finite("layerHeight", self.layer_height)?;
+        if self.layer_height < MIN_SLICER_SPACING_UM {
+            return Err(ValidationError::new(format!(
+                "layerHeight must be at least {MIN_SLICER_SPACING_UM} µm"
+            )));
+        }
+        finite("hatchSpacing", self.hatch_spacing)?;
+        if self.hatch_spacing < MIN_SLICER_SPACING_UM {
+            return Err(ValidationError::new(format!(
+                "hatchSpacing must be at least {MIN_SLICER_SPACING_UM} µm"
+            )));
+        }
         finite("hatchAngle", self.hatch_angle)?;
         nonnegative("contourCount", self.contour_count)?;
+        if self.contour_count > 64.0 || self.contour_count.fract() != 0.0 {
+            return Err(ValidationError::new(
+                "contourCount must be a whole number between zero and 64",
+            ));
+        }
         finite("passes", self.passes)?;
         if !(1.0..=3.0).contains(&self.passes) || self.passes.fract() != 0.0 {
             return Err(ValidationError::new(
