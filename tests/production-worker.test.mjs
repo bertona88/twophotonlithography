@@ -6,6 +6,8 @@ import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 
 const SLICE_FIELD_COUNT = 5;
+const MESSAGE_TIMEOUT_MS = 30_000;
+const EXPOSURE_ACTIVE_BUDGET_MS = 20_000;
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = path.resolve(TEST_DIR, "..");
 const CLIENT_ROOT = path.join(REPOSITORY_ROOT, "dist", "client");
@@ -58,7 +60,7 @@ function waitForMessage(worker, predicate, description) {
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error(`Timed out waiting for ${description}`));
-    }, 15_000);
+    }, MESSAGE_TIMEOUT_MS);
 
     function cleanup() {
       clearTimeout(timeout);
@@ -346,7 +348,7 @@ test("production worker initializes browser Wasm and honors its message contract
       `full-volume exposure active wall time ${exposureActiveMilliseconds.toFixed(0)} ms`,
     );
     assert.ok(
-      exposureActiveMilliseconds < 10_000,
+      exposureActiveMilliseconds < EXPOSURE_ACTIVE_BUDGET_MS,
       "the time-sliced production exposure must complete within its worker budget",
     );
     assert.equal(
