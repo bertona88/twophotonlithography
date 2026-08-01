@@ -4,6 +4,7 @@ import * as THREE from "three";
 import {
   lineSegmentDrawCount,
   multipassPathProgress,
+  quantizeVoxelActivity,
   voxelActivity,
 } from "../app/volume-visualization.js";
 import {
@@ -27,6 +28,13 @@ test("each field reveals only its simulated signal", () => {
   assert.ok(voxelActivity("oxygen", 0, 0.6, 0, 1) > 0.9);
   assert.ok(voxelActivity("radicals", 0, 1, 0.3, 1) > 0.9);
   assert.ok(voxelActivity("development", 0.4, 1, 0, 0.8) > 0.7);
+});
+
+test("sub-byte chemistry changes share one stable voxel matrix state", () => {
+  assert.equal(quantizeVoxelActivity(0), 0);
+  assert.equal(quantizeVoxelActivity(0.5001), 128);
+  assert.equal(quantizeVoxelActivity(0.5002), 128);
+  assert.equal(quantizeVoxelActivity(1), 255);
 });
 
 test("voxel mesh uses initialized instance colors without vertex-color multiplication", () => {

@@ -152,6 +152,45 @@ struct ScanPoint {
     starts_segment: bool,
 }
 
+#[derive(Clone, Copy)]
+struct ScanPointTiming {
+    focus: [f32; 3],
+    previous_index: u32,
+    illuminated_seconds: f64,
+    jump_seconds: f64,
+}
+
+#[derive(Clone)]
+struct DynamicDiagnostics {
+    oxygen_mean: f64,
+    radical_max: f64,
+    conversion_mean: f64,
+    gelled_fraction: f64,
+    surviving_fraction: f64,
+    off_target_active_voxels: usize,
+    off_target_conversion_mean: f64,
+    off_target_gelled_fraction: f64,
+    off_target_surviving_fraction: f64,
+    checksum: String,
+}
+
+impl Default for DynamicDiagnostics {
+    fn default() -> Self {
+        Self {
+            oxygen_mean: 1.0,
+            radical_max: 0.0,
+            conversion_mean: 0.0,
+            gelled_fraction: 0.0,
+            surviving_fraction: 1.0,
+            off_target_active_voxels: 0,
+            off_target_conversion_mean: 0.0,
+            off_target_gelled_fraction: 0.0,
+            off_target_surviving_fraction: 0.0,
+            checksum: String::new(),
+        }
+    }
+}
+
 struct ScanSchedule {
     path: Vec<ScanPoint>,
     layer_positions: Vec<f32>,
@@ -181,6 +220,7 @@ pub struct WholeVolumeSimulation {
     active_frontier: Vec<u32>,
     spare_frontier: Vec<u32>,
     scan_path: Vec<ScanPoint>,
+    scan_timing: Vec<ScanPointTiming>,
     scan_path_segments: Vec<f32>,
     layer_positions: Vec<f32>,
     render_indices: Vec<usize>,
@@ -198,6 +238,9 @@ pub struct WholeVolumeSimulation {
     inactive_oxygen_baseline: f32,
     previous_focus: Option<usize>,
     focus: [f32; 3],
+    cached_path_length_um: f64,
+    cached_estimated_exposure_seconds: f64,
+    cached_dynamic_diagnostics: DynamicDiagnostics,
 }
 
 impl WholeVolumeSimulation {
@@ -246,6 +289,16 @@ impl WholeVolumeSimulation {
             target_developer_depths(&occupancy, &occupied_render_indices, dims, pitch_um);
         let scan_path_segments =
             build_scan_path_segments(&scan_schedule.path, dims, BASE_ORIGIN_UM, pitch_um);
+        let scan_timing = build_scan_timing(
+            &scan_schedule.path,
+            dims,
+            BASE_ORIGIN_UM,
+            pitch_um,
+            &parameters,
+        );
+        let cached_path_length_um = packed_segment_length(&scan_path_segments);
+        let cached_estimated_exposure_seconds =
+            estimated_exposure_seconds(&scan_schedule.path, dims, pitch_um, &parameters);
         let psf_kernel = build_vectorial_psf(parameters.na, parameters.wavelength, tier, pitch_um);
         let psf_preview = summarize_psf(
             &psf_kernel,
@@ -254,7 +307,7 @@ impl WholeVolumeSimulation {
             tier,
             pitch_um,
         );
-        let simulation = Self {
+        let mut simulation = Self {
             photoinitiator: vec![parameters.initiator as f32; len],
             oxygen: vec![parameters.oxygen as f32; len],
             radicals: vec![0.0; len],
@@ -292,10 +345,15 @@ impl WholeVolumeSimulation {
             occupancy,
             occupied_indices,
             scan_path: scan_schedule.path,
+            scan_timing,
             scan_path_segments,
             layer_positions: scan_schedule.layer_positions,
             render_indices,
+            cached_path_length_um,
+            cached_estimated_exposure_seconds,
+            cached_dynamic_diagnostics: DynamicDiagnostics::default(),
         };
+        simulation.refresh_dynamic_diagnostics();
         Ok(simulation)
     }
 
@@ -339,9 +397,20 @@ impl WholeVolumeSimulation {
             self.layer_positions = schedule.layer_positions;
         }
         self.exposure_steps_total = schedule_steps(self.scan_path.len(), self.parameters.passes);
+        self.scan_timing = build_scan_timing(
+            &self.scan_path,
+            self.dims,
+            self.origin_um,
+            self.pitch_um,
+            &self.parameters,
+        );
+        self.cached_path_length_um = packed_segment_length(&self.scan_path_segments);
+        self.cached_estimated_exposure_seconds =
+            estimated_exposure_seconds(&self.scan_path, self.dims, self.pitch_um, &self.parameters);
         if optics_changed {
             self.rebuild_psf();
         }
+        self.refresh_dynamic_diagnostics();
         Ok(())
     }
 
@@ -366,6 +435,7 @@ impl WholeVolumeSimulation {
         self.inactive_oxygen_baseline = self.parameters.oxygen as f32;
         self.previous_focus = None;
         self.focus = [0.0, 0.0, 7.0];
+        self.refresh_dynamic_diagnostics();
     }
 
     pub fn advance_exposure_steps(&mut self, requested: u32) -> u32 {
@@ -393,30 +463,23 @@ impl WholeVolumeSimulation {
         for target in start..end {
             let path_index = target % self.scan_path.len();
             let scan_point = self.scan_path[path_index];
+            let timing = self.scan_timing[path_index];
             let focus_index = scan_point.index as usize;
-            let focus_xyz = self.xyz(focus_index);
             if let Some(previous) = self.previous_focus {
-                let a = self.xyz(previous);
-                let distance = ((a[0] - focus_xyz[0]).powi(2)
-                    + (a[1] - focus_xyz[1]).powi(2)
-                    + (a[2] - focus_xyz[2]).powi(2))
-                .sqrt();
                 if scan_point.starts_segment {
-                    let jump_speed = (self.parameters.speed * 8.0).max(200.0);
-                    elapsed += distance / jump_speed;
+                    elapsed += if previous == timing.previous_index as usize {
+                        timing.jump_seconds
+                    } else {
+                        index_distance(previous, focus_index, self.dims, self.pitch_um)
+                            / (self.parameters.speed * 8.0).max(200.0)
+                    };
                 }
             }
-            let illuminated_distance =
-                illuminated_distance_at(&self.scan_path, path_index, self.dims, self.pitch_um);
-            let illuminated_dt = illuminated_distance / self.parameters.speed;
+            let illuminated_dt = timing.illuminated_seconds;
             self.deposit_psf(focus_index, illuminated_dt);
             elapsed += illuminated_dt;
             self.previous_focus = Some(focus_index);
-            self.focus = [
-                focus_xyz[0] as f32,
-                focus_xyz[1] as f32,
-                focus_xyz[2] as f32,
-            ];
+            self.focus = timing.focus;
         }
         self.evolve_active_dark(elapsed);
         self.simulated_time_seconds += elapsed;
@@ -757,7 +820,12 @@ impl WholeVolumeSimulation {
         &self.layer_positions
     }
 
-    pub fn diagnostics(&self) -> VolumeDiagnostics {
+    pub fn diagnostics(&mut self) -> VolumeDiagnostics {
+        self.refresh_dynamic_diagnostics();
+        self.cached_diagnostics()
+    }
+
+    pub fn cached_diagnostics(&self) -> VolumeDiagnostics {
         let owned_memory_bytes = self.occupancy.capacity()
             + self.occupied_indices.capacity() * std::mem::size_of::<u32>()
             + self.photoinitiator.capacity() * std::mem::size_of::<f32>()
@@ -775,44 +843,15 @@ impl WholeVolumeSimulation {
             + self.active_frontier.capacity() * std::mem::size_of::<u32>()
             + self.spare_frontier.capacity() * std::mem::size_of::<u32>()
             + self.scan_path.capacity() * std::mem::size_of::<ScanPoint>()
+            + self.scan_timing.capacity() * std::mem::size_of::<ScanPointTiming>()
             + self.scan_path_segments.capacity() * std::mem::size_of::<f32>()
             + self.layer_positions.capacity() * std::mem::size_of::<f32>()
             + self.render_indices.capacity() * std::mem::size_of::<usize>()
             + self.render_snapshot.capacity() * std::mem::size_of::<f32>()
             + self.xy_slice_snapshot.capacity() * std::mem::size_of::<f32>()
-            + self.psf_kernel.capacity() * std::mem::size_of::<KernelVoxel>();
-        let path_length_um = packed_segment_length(&self.scan_path_segments);
-        let denominator = self.occupied_indices.len().max(1) as f64;
-        let oxygen_scale = self.parameters.oxygen.max(1e-9);
-        let mut oxygen_sum = 0.0;
-        let mut radical_max = 0.0_f64;
-        let mut conversion_sum = 0.0;
-        let mut gelled = 0_usize;
-        let mut surviving = 0_usize;
-        for &index in &self.occupied_indices {
-            let index = index as usize;
-            oxygen_sum += self.oxygen[index] as f64 / oxygen_scale;
-            radical_max = radical_max.max(self.radicals[index] as f64);
-            conversion_sum += self.conversion[index] as f64;
-            gelled += (self.conversion[index] as f64 >= self.parameters.gel_point) as usize;
-            surviving += (self.remaining[index] >= 0.5) as usize;
-        }
-        let mut off_target_active = 0_usize;
-        let mut off_target_conversion_sum = 0.0;
-        let mut off_target_gelled = 0_usize;
-        let mut off_target_surviving = 0_usize;
-        for &index in &self.active_indices {
-            let index = index as usize;
-            if self.occupancy[index] != 0 {
-                continue;
-            }
-            off_target_active += 1;
-            off_target_conversion_sum += self.conversion[index] as f64;
-            off_target_gelled +=
-                (self.conversion[index] as f64 >= self.parameters.gel_point) as usize;
-            off_target_surviving += (self.remaining[index] >= 0.5) as usize;
-        }
-        let off_target_denominator = off_target_active.max(1) as f64;
+            + self.psf_kernel.capacity() * std::mem::size_of::<KernelVoxel>()
+            + self.cached_dynamic_diagnostics.checksum.capacity();
+        let dynamic = &self.cached_dynamic_diagnostics;
         VolumeDiagnostics {
             solver: "Rust/Wasm 3D volume",
             quality_tier: self.tier.name,
@@ -830,31 +869,30 @@ impl WholeVolumeSimulation {
             psf_preview: self.psf_preview.clone(),
             scan_points: self.scan_path.len(),
             layer_count: self.layer_positions.len(),
-            path_length_um,
-            estimated_exposure_seconds: estimated_exposure_seconds(
-                &self.scan_path,
-                self.dims,
-                self.pitch_um,
-                &self.parameters,
-            ),
+            path_length_um: self.cached_path_length_um,
+            estimated_exposure_seconds: self.cached_estimated_exposure_seconds,
             exposure_step: self.exposure_step,
             exposure_steps_total: self.exposure_steps_total,
             development_step: self.development_step,
             development_steps_total: self.development_steps_total,
             simulated_time_seconds: self.simulated_time_seconds,
-            oxygen_mean: oxygen_sum / denominator,
-            radical_max,
-            conversion_mean: conversion_sum / denominator,
-            gelled_fraction: gelled as f64 / denominator,
-            surviving_fraction: surviving as f64 / denominator,
+            oxygen_mean: dynamic.oxygen_mean,
+            radical_max: dynamic.radical_max,
+            conversion_mean: dynamic.conversion_mean,
+            gelled_fraction: dynamic.gelled_fraction,
+            surviving_fraction: dynamic.surviving_fraction,
             target_voxels: self.occupied_indices.len(),
             render_voxels: self.render_indices.len(),
-            off_target_active_voxels: off_target_active,
-            off_target_conversion_mean: off_target_conversion_sum / off_target_denominator,
-            off_target_gelled_fraction: off_target_gelled as f64 / off_target_denominator,
-            off_target_surviving_fraction: off_target_surviving as f64 / off_target_denominator,
-            checksum: checksum(self),
+            off_target_active_voxels: dynamic.off_target_active_voxels,
+            off_target_conversion_mean: dynamic.off_target_conversion_mean,
+            off_target_gelled_fraction: dynamic.off_target_gelled_fraction,
+            off_target_surviving_fraction: dynamic.off_target_surviving_fraction,
+            checksum: dynamic.checksum.clone(),
         }
+    }
+
+    fn refresh_dynamic_diagnostics(&mut self) {
+        self.cached_dynamic_diagnostics = calculate_dynamic_diagnostics(self);
     }
 }
 
@@ -1237,6 +1275,38 @@ fn build_scan_path_segments(
         }
     }
     segments
+}
+
+fn build_scan_timing(
+    path: &[ScanPoint],
+    dims: [usize; 3],
+    origin_um: [f64; 3],
+    pitch_um: [f64; 3],
+    parameters: &Parameters,
+) -> Vec<ScanPointTiming> {
+    if path.is_empty() {
+        return Vec::new();
+    }
+    let jump_speed = (parameters.speed * 8.0).max(200.0);
+    path.iter()
+        .enumerate()
+        .map(|(path_index, point)| {
+            let previous_index = path[(path_index + path.len() - 1) % path.len()].index;
+            let xyz = index_to_xyz(point.index as usize, dims, origin_um, pitch_um);
+            ScanPointTiming {
+                focus: [xyz[0] as f32, xyz[1] as f32, xyz[2] as f32],
+                previous_index,
+                illuminated_seconds: illuminated_distance_at(path, path_index, dims, pitch_um)
+                    / parameters.speed,
+                jump_seconds: index_distance(
+                    previous_index as usize,
+                    point.index as usize,
+                    dims,
+                    pitch_um,
+                ) / jump_speed,
+            }
+        })
+        .collect()
 }
 
 fn packed_segment_length(segments: &[f32]) -> f64 {
@@ -1784,7 +1854,12 @@ fn laplacian_with_neighbors(
             * inverse_pitch_squared[2]
 }
 
-fn checksum(simulation: &WholeVolumeSimulation) -> String {
+fn hash_word(hash: &mut u32, word: u32) {
+    *hash ^= word;
+    *hash = hash.wrapping_mul(16_777_619);
+}
+
+fn calculate_dynamic_diagnostics(simulation: &WholeVolumeSimulation) -> DynamicDiagnostics {
     let mut hash = 2_166_136_261_u32;
     for word in [
         simulation.exposure_step,
@@ -1794,8 +1869,7 @@ fn checksum(simulation: &WholeVolumeSimulation) -> String {
         simulation.inactive_initiator_baseline.to_bits(),
         simulation.inactive_oxygen_baseline.to_bits(),
     ] {
-        hash ^= word;
-        hash = hash.wrapping_mul(16_777_619);
+        hash_word(&mut hash, word);
     }
     for value in [
         simulation.parameters.initiator,
@@ -1803,38 +1877,58 @@ fn checksum(simulation: &WholeVolumeSimulation) -> String {
     ] {
         let bits = value.to_bits();
         for word in [bits as u32, (bits >> 32) as u32] {
-            hash ^= word;
-            hash = hash.wrapping_mul(16_777_619);
+            hash_word(&mut hash, word);
         }
     }
+    let target_denominator = simulation.occupied_indices.len().max(1) as f64;
+    let oxygen_scale = simulation.parameters.oxygen.max(1e-9);
+    let mut oxygen_sum = 0.0;
+    let mut radical_max = 0.0_f64;
+    let mut conversion_sum = 0.0;
+    let mut gelled = 0_usize;
+    let mut surviving = 0_usize;
+    let mut off_target_active = 0_usize;
+    let mut off_target_conversion_sum = 0.0;
+    let mut off_target_gelled = 0_usize;
+    let mut off_target_surviving = 0_usize;
+
     // P/O/R/X can only differ from their homogeneous initial conditions on
     // the active diffusion domain. Development state changes on the target
-    // occupancy and on active off-target spill. Hash those complete mutable
-    // domains without scanning every dense array on each UI frame.
+    // occupancy and on active off-target spill. Accumulate telemetry while
+    // hashing those domains so a diagnostics refresh traverses each target
+    // only once and each active spill cell at most twice.
     for &index in &simulation.active_indices {
         let index = index as usize;
-        hash ^= index as u32;
-        hash = hash.wrapping_mul(16_777_619);
+        hash_word(&mut hash, index as u32);
         for value in [
             simulation.photoinitiator[index],
             simulation.oxygen[index],
             simulation.radicals[index],
             simulation.conversion[index],
         ] {
-            hash ^= value.to_bits();
-            hash = hash.wrapping_mul(16_777_619);
+            hash_word(&mut hash, value.to_bits());
+        }
+        if simulation.occupancy[index] == 0 {
+            off_target_active += 1;
+            off_target_conversion_sum += simulation.conversion[index] as f64;
+            off_target_gelled +=
+                (simulation.conversion[index] as f64 >= simulation.parameters.gel_point) as usize;
+            off_target_surviving += (simulation.remaining[index] >= 0.5) as usize;
         }
     }
     for &index in &simulation.occupied_indices {
         let index = index as usize;
-        hash ^= index as u32;
-        hash = hash.wrapping_mul(16_777_619);
+        oxygen_sum += simulation.oxygen[index] as f64 / oxygen_scale;
+        radical_max = radical_max.max(simulation.radicals[index] as f64);
+        conversion_sum += simulation.conversion[index] as f64;
+        gelled += (simulation.conversion[index] as f64 >= simulation.parameters.gel_point) as usize;
+        surviving += (simulation.remaining[index] >= 0.5) as usize;
+        hash_word(&mut hash, index as u32);
         for value in [
             simulation.remaining[index],
             simulation.developer_integral[index],
         ] {
-            hash ^= value.to_bits();
-            hash = hash.wrapping_mul(16_777_619);
+            hash_word(&mut hash, value.to_bits());
         }
     }
     for &index in &simulation.active_indices {
@@ -1842,17 +1936,32 @@ fn checksum(simulation: &WholeVolumeSimulation) -> String {
         if simulation.occupancy[index] != 0 {
             continue;
         }
-        hash ^= index as u32;
-        hash = hash.wrapping_mul(16_777_619);
+        hash_word(&mut hash, index as u32);
         for value in [
             simulation.remaining[index],
             simulation.developer_integral[index],
         ] {
-            hash ^= value.to_bits();
-            hash = hash.wrapping_mul(16_777_619);
+            hash_word(&mut hash, value.to_bits());
         }
     }
-    format!("{hash:08x}")
+    let off_target_denominator = off_target_active.max(1) as f64;
+    DynamicDiagnostics {
+        oxygen_mean: oxygen_sum / target_denominator,
+        radical_max,
+        conversion_mean: conversion_sum / target_denominator,
+        gelled_fraction: gelled as f64 / target_denominator,
+        surviving_fraction: surviving as f64 / target_denominator,
+        off_target_active_voxels: off_target_active,
+        off_target_conversion_mean: off_target_conversion_sum / off_target_denominator,
+        off_target_gelled_fraction: off_target_gelled as f64 / off_target_denominator,
+        off_target_surviving_fraction: off_target_surviving as f64 / off_target_denominator,
+        checksum: format!("{hash:08x}"),
+    }
+}
+
+#[cfg(test)]
+fn checksum(simulation: &WholeVolumeSimulation) -> String {
+    calculate_dynamic_diagnostics(simulation).checksum
 }
 
 #[cfg(test)]
@@ -2027,7 +2136,7 @@ mod tests {
         live_raised
             .set_parameters(raised.clone())
             .expect("bounded concentration increase should apply");
-        let fresh_raised = minimal_simulation(raised);
+        let mut fresh_raised = minimal_simulation(raised);
         assert_eq!(live_raised.parameters, fresh_raised.parameters);
         assert_eq!(live_raised.photoinitiator[0], 1.0);
         assert_eq!(fresh_raised.photoinitiator[0], 2.0);
@@ -2258,7 +2367,7 @@ mod tests {
             "physical layer count drifted by tier: {layer_counts:?}"
         );
 
-        let simulation = minimal_simulation(parameters);
+        let mut simulation = minimal_simulation(parameters);
         let diagnostics = simulation.diagnostics();
         assert_eq!(diagnostics.layer_count, simulation.layer_positions.len());
         assert_eq!(simulation.scan_path_segments.len() % 6, 0);
@@ -2446,6 +2555,7 @@ mod tests {
     #[test]
     fn volume_replay_is_batch_independent_and_timeline_matches_estimate() {
         let mut one_step = minimal_simulation(Parameters::default());
+        assert_eq!(one_step.scan_timing.len(), one_step.scan_path.len());
         assert_eq!(one_step.advance_exposure_steps(1), 1);
         assert!(one_step.simulated_time_seconds > 0.0);
         assert!(one_step.conversion.iter().any(|value| *value > 0.0));
@@ -2470,6 +2580,23 @@ mod tests {
             (diagnostics.simulated_time_seconds - diagnostics.estimated_exposure_seconds).abs()
                 < 1e-10
         );
+    }
+
+    #[test]
+    fn dynamic_diagnostics_refresh_only_when_requested() {
+        let mut simulation = minimal_simulation(Parameters::default());
+        let initial = simulation.cached_diagnostics();
+        assert_eq!(simulation.advance_exposure_steps(1), 1);
+
+        let cached = simulation.cached_diagnostics();
+        assert_eq!(cached.exposure_step, 1);
+        assert_eq!(cached.checksum, initial.checksum);
+        assert_eq!(cached.conversion_mean, initial.conversion_mean);
+
+        let refreshed = simulation.diagnostics();
+        assert_ne!(refreshed.checksum, initial.checksum);
+        assert!(refreshed.conversion_mean > initial.conversion_mean);
+        assert_eq!(simulation.cached_diagnostics().checksum, refreshed.checksum);
     }
 
     #[test]

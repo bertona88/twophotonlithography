@@ -67,6 +67,11 @@ const XY_SLICE_FIELD_COUNT = 5;
 const MAX_PENDING_MESSAGES = 64;
 const MIN_LAYER_HEIGHT_UM = 0.25;
 const MIN_HATCH_SPACING_UM = 0.25;
+const SOLVER_SLICE_BUDGET_MS = 24;
+const SNAPSHOT_INTERVAL_MS = 100;
+const DIAGNOSTICS_INTERVAL_MS = 500;
+const EXPOSURE_STEPS_PER_SLICE = 6;
+const DEVELOPMENT_STEPS_PER_SLICE = 4;
 const TOOLPATH_PARAMETER_KEYS = [
   "layerHeight",
   "hatchSpacing",
@@ -137,6 +142,7 @@ type VolumeGeometryExports = WholeVolumeSimulation & {
   xy_slice_width(): number;
   xy_slice_height(): number;
   xy_slice_z_um(): number;
+  get_cached_diagnostics(): VolumeDiagnostics;
 };
 
 type VolumeSnapshot = {
@@ -165,6 +171,8 @@ let rateWindowStartedAt = performance.now();
 let rateWindowUpdates = 0;
 let updatesPerSecond = 0;
 let inspectedZUm = 0;
+let lastSnapshotAt = 0;
+let lastDiagnosticsAt = 0;
 
 let linePositions = new Float32Array(0);
 let layerPositions = new Float32Array(0);
@@ -275,9 +283,12 @@ function configureSimulation(next: ModelParams) {
 }
 
 function resetUpdateRate() {
-  rateWindowStartedAt = performance.now();
+  const now = performance.now();
+  rateWindowStartedAt = now;
   rateWindowUpdates = 0;
   updatesPerSecond = 0;
+  lastSnapshotAt = now;
+  lastDiagnosticsAt = now;
 }
 
 function recordSimulationUpdates(count: number) {
@@ -395,67 +406,106 @@ function resetFields() {
   return volumeDiagnostics;
 }
 
-function runExposureBatch() {
-  const batch = 6;
-  const requestedSteps = Math.max(
-    0,
-    Math.min(batch, exposureStepsTotal - exposureStep),
+function publishScheduledSnapshot(forceDiagnostics = false) {
+  const now = performance.now();
+  if (!forceDiagnostics && now - lastSnapshotAt < SNAPSHOT_INTERVAL_MS) {
+    return;
+  }
+  const refreshDiagnostics =
+    forceDiagnostics || now - lastDiagnosticsAt >= DIAGNOSTICS_INTERVAL_MS;
+  emitSnapshot(undefined, refreshDiagnostics);
+  const publishedAt = performance.now();
+  lastSnapshotAt = publishedAt;
+  if (refreshDiagnostics) {
+    lastDiagnosticsAt = publishedAt;
+  }
+}
+
+function scheduleNext(callback: () => void) {
+  timer = setTimeout(callback, 0);
+}
+
+function runExposureSlice() {
+  const sliceStartedAt = performance.now();
+  let advancedSteps = 0;
+  do {
+    const remainingSteps = exposureStepsTotal - exposureStep;
+    if (remainingSteps <= 0) break;
+    const advanced = requireVolumeSimulation().advance_exposure_steps(1);
+    exposureStep += advanced;
+    advancedSteps += advanced;
+    if (advanced === 0) break;
+  } while (
+    advancedSteps < EXPOSURE_STEPS_PER_SLICE &&
+    performance.now() - sliceStartedAt < SOLVER_SLICE_BUDGET_MS
   );
-  const advancedSteps =
-    requireVolumeSimulation().advance_exposure_steps(requestedSteps);
-  exposureStep += advancedSteps;
   recordSimulationUpdates(advancedSteps);
 
   if (exposureStep >= exposureStepsTotal) {
     stage = "paused";
     stopTimer();
+    publishScheduledSnapshot(true);
+    return;
   }
-  emitSnapshot();
+  publishScheduledSnapshot();
+  scheduleNext(() => runScheduledCommand("advanceExposure", runExposureSlice));
 }
 
-function runDevelopmentBatch() {
-  const batch = 4;
-  const requestedSteps = Math.min(
-    batch,
-    Math.max(0, developmentStepsTotal - developmentStep),
+function runDevelopmentSlice() {
+  const sliceStartedAt = performance.now();
+  let advancedSteps = 0;
+  do {
+    const remainingSteps = developmentStepsTotal - developmentStep;
+    if (remainingSteps <= 0) break;
+    const advanced = requireVolumeSimulation().advance_development_steps(1);
+    developmentStep += advanced;
+    advancedSteps += advanced;
+    if (advanced === 0) break;
+  } while (
+    advancedSteps < DEVELOPMENT_STEPS_PER_SLICE &&
+    performance.now() - sliceStartedAt < SOLVER_SLICE_BUDGET_MS
   );
-  const advancedSteps =
-    requireVolumeSimulation().advance_development_steps(requestedSteps);
-  developmentStep += advancedSteps;
   recordSimulationUpdates(advancedSteps);
 
   if (developmentStep >= developmentStepsTotal) {
     stage = "complete";
     stopTimer();
+    publishScheduledSnapshot(true);
+    return;
   }
-  emitSnapshot();
+  publishScheduledSnapshot();
+  scheduleNext(() =>
+    runScheduledCommand("advanceDevelopment", runDevelopmentSlice),
+  );
 }
 
 function startExposure() {
   if (macroPositions.length === 0) return;
   stage = "exposing";
   stopTimer();
-  timer = setInterval(
-    () => runScheduledCommand("advanceExposure", runExposureBatch),
-    46,
+  resetUpdateRate();
+  emitSnapshot(undefined, false);
+  lastSnapshotAt = performance.now();
+  scheduleNext(() =>
+    runScheduledCommand("advanceExposure", runExposureSlice),
   );
-  emitSnapshot();
 }
 
 function startDevelopment() {
   if (macroPositions.length === 0) return;
   stage = "developing";
   stopTimer();
-  timer = setInterval(
-    () => runScheduledCommand("advanceDevelopment", runDevelopmentBatch),
-    48,
+  resetUpdateRate();
+  emitSnapshot(undefined, false);
+  lastSnapshotAt = performance.now();
+  scheduleNext(() =>
+    runScheduledCommand("advanceDevelopment", runDevelopmentSlice),
   );
-  emitSnapshot();
 }
 
 function stopTimer() {
   if (timer !== null) {
-    clearInterval(timer);
+    clearTimeout(timer);
     timer = null;
   }
 }
@@ -551,7 +601,7 @@ function readXYSlice(volumeDiagnostics: VolumeDiagnostics) {
   };
 }
 
-function readVolumeSnapshot() {
+function readVolumeSnapshot(refreshDiagnostics = true) {
   const volume = requireVolumeSimulation();
   if (!wasmMemory) {
     throw new Error("Rust/Wasm memory is unavailable");
@@ -590,7 +640,9 @@ function readVolumeSnapshot() {
   }
 
   return {
-    diagnostics: volume.get_diagnostics() as VolumeDiagnostics,
+    diagnostics: refreshDiagnostics
+      ? (volume.get_diagnostics() as VolumeDiagnostics)
+      : (volume as VolumeGeometryExports).get_cached_diagnostics(),
     conversion,
     oxygen,
     radicals,
@@ -598,8 +650,12 @@ function readVolumeSnapshot() {
   };
 }
 
-function emitSnapshot(volumeSnapshot?: VolumeSnapshot) {
-  const currentVolumeSnapshot = volumeSnapshot ?? readVolumeSnapshot();
+function emitSnapshot(
+  volumeSnapshot?: VolumeSnapshot,
+  refreshDiagnostics = true,
+) {
+  const currentVolumeSnapshot =
+    volumeSnapshot ?? readVolumeSnapshot(refreshDiagnostics);
   const {
     diagnostics: volumeDiagnostics,
     conversion,

@@ -6,6 +6,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { initializeRenderer } from "./renderer-initialization";
 import {
   lineSegmentDrawCount,
+  quantizeVoxelActivity,
   voxelActivity,
 } from "./volume-visualization";
 import { createVoxelMesh, voxelPathOpacity } from "./voxel-rendering";
@@ -60,6 +61,10 @@ type SceneHandles = {
   sectionPlane: THREE.Plane;
   resizeObserver: ResizeObserver;
   animationFrame: number;
+  voxelActivityState: Uint8Array;
+  voxelColorState: Uint32Array;
+  voxelVisualMode: FieldMode | null;
+  voxelPitchKey: string;
 };
 
 const RENDERER_UNAVAILABLE_MESSAGE =
@@ -201,6 +206,9 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
       clippingPlanes: [sectionPlane],
     }),
   );
+  path.userData.currentProgress = 0;
+  path.userData.targetProgress = 0;
+  path.userData.stage = "model";
   scene.add(path);
 
   const materialPoints = createVoxelMesh(THREE, MAX_RENDER_VOXELS);
@@ -220,6 +228,7 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
   );
   focus.scale.set(0.34, 0.34, 1.0);
   focus.position.set(0, 0, 7);
+  focus.userData.targetPosition = focus.position.clone();
   scene.add(focus);
 
   const focusHalo = new THREE.Mesh(
@@ -252,6 +261,7 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
   beam.rotation.x = BEAM_ROTATION_X;
   beam.scale.set(2.2, 17, 2.2);
   beam.position.set(0, 0, 15.5);
+  beam.userData.focusOffsetZ = 8.5;
   scene.add(beam);
 
   const membrane = new THREE.Mesh(
@@ -295,6 +305,43 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
   const animate = () => {
     const elapsed = (performance.now() - started) / 1000;
     controls.update();
+    const focusPositionTarget = focus.userData.targetPosition as
+      | THREE.Vector3
+      | undefined;
+    if (focusPositionTarget) {
+      focus.position.lerp(focusPositionTarget, 0.24);
+      focusHalo.position.copy(focus.position);
+      lensBox.position.copy(focus.position);
+      beam.position.set(
+        focus.position.x,
+        focus.position.y,
+        focus.position.z + (beam.userData.focusOffsetZ as number),
+      );
+    }
+    const targetProgress = path.userData.targetProgress as number;
+    const currentProgress = path.userData.currentProgress as number;
+    const nextProgress = THREE.MathUtils.lerp(currentProgress, targetProgress, 0.22);
+    path.userData.currentProgress =
+      Math.abs(targetProgress - nextProgress) < 0.0001
+        ? targetProgress
+        : nextProgress;
+    path.geometry.setDrawRange(
+      0,
+      lineSegmentDrawCount(
+        path.geometry.getAttribute("position")?.count ?? 0,
+        path.userData.currentProgress as number,
+      ),
+    );
+    const pathMaterial = path.material as THREE.LineBasicMaterial;
+    const targetOpacity = voxelPathOpacity(
+      path.userData.stage as string,
+      path.userData.targetProgress as number,
+    );
+    pathMaterial.opacity = THREE.MathUtils.lerp(
+      pathMaterial.opacity,
+      targetOpacity,
+      0.2,
+    );
     const pulse = 1 + Math.sin(elapsed * 4.5) * 0.08;
     const focusTarget = focus.userData.targetScale as THREE.Vector3 | undefined;
     if (focusTarget) focus.scale.lerp(focusTarget, 0.18);
@@ -325,6 +372,10 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
     sectionPlane,
     resizeObserver,
     animationFrame,
+    voxelActivityState: new Uint8Array(MAX_RENDER_VOXELS),
+    voxelColorState: new Uint32Array(MAX_RENDER_VOXELS),
+    voxelVisualMode: null,
+    voxelPitchKey: "",
   };
 }
 
@@ -432,6 +483,8 @@ export default function LabViewport({
     handles.path.geometry.dispose();
     handles.path.geometry = geometry;
     handles.path.geometry.setDrawRange(0, 0);
+    handles.path.userData.currentProgress = 0;
+    handles.path.userData.targetProgress = 0;
   }, [pathPositions]);
 
   useEffect(() => {
@@ -457,6 +510,9 @@ export default function LabViewport({
     handles.materialPoints.count = count;
     handles.materialPoints.instanceMatrix.needsUpdate = true;
     handles.materialPoints.computeBoundingSphere();
+    handles.voxelActivityState.fill(255);
+    handles.voxelColorState.fill(0xffffffff);
+    handles.voxelVisualMode = null;
   }, [macroPositions, voxelPitch]);
 
   useEffect(() => {
@@ -469,6 +525,11 @@ export default function LabViewport({
     const quaternion = new THREE.Quaternion();
     const scale = new THREE.Vector3();
     const count = Math.min(handles.materialPoints.count, conversion.length);
+    const pitchKey = voxelPitch.join(":");
+    const forceUpdate =
+      handles.voxelVisualMode !== fieldMode || handles.voxelPitchKey !== pitchKey;
+    let matricesChanged = false;
+    let colorsChanged = false;
     for (let index = 0; index < count; index += 1) {
       const conversionValue = conversion[index] / 255;
       const oxygenValue = (oxygen?.[index] ?? 255) / 255;
@@ -481,16 +542,22 @@ export default function LabViewport({
         radicalValue,
         remainingValue,
       );
-
-      position.fromArray(macroPositions, index * 3);
-      const visibleScale = activity <= 0 ? 0 : 0.58 + Math.sqrt(activity) * 0.42;
-      scale.set(
-        voxelPitch[0] * 0.92 * visibleScale,
-        voxelPitch[1] * 0.92 * visibleScale,
-        voxelPitch[2] * 0.92 * visibleScale,
-      );
-      matrix.compose(position, quaternion, scale);
-      handles.materialPoints.setMatrixAt(index, matrix);
+      const activityState = quantizeVoxelActivity(activity);
+      if (forceUpdate || handles.voxelActivityState[index] !== activityState) {
+        const quantizedActivity = activityState / 255;
+        position.fromArray(macroPositions, index * 3);
+        const visibleScale =
+          activityState === 0 ? 0 : 0.58 + Math.sqrt(quantizedActivity) * 0.42;
+        scale.set(
+          voxelPitch[0] * 0.92 * visibleScale,
+          voxelPitch[1] * 0.92 * visibleScale,
+          voxelPitch[2] * 0.92 * visibleScale,
+        );
+        matrix.compose(position, quaternion, scale);
+        handles.materialPoints.setMatrixAt(index, matrix);
+        handles.voxelActivityState[index] = activityState;
+        matricesChanged = true;
+      }
 
       if (fieldMode === "oxygen") {
         color.copy(DARK).lerp(CYAN, 1 - oxygenValue);
@@ -504,13 +571,22 @@ export default function LabViewport({
       } else {
         color.copy(DARK).lerp(AMBER, conversionValue * 1.8);
       }
-      visible ||= activity > 0;
-      handles.materialPoints.setColorAt(index, color);
+      visible ||= activityState > 0;
+      const colorState = color.getHex();
+      if (forceUpdate || handles.voxelColorState[index] !== colorState) {
+        handles.materialPoints.setColorAt(index, color);
+        handles.voxelColorState[index] = colorState;
+        colorsChanged = true;
+      }
     }
-    handles.materialPoints.instanceMatrix.needsUpdate = true;
-    if (handles.materialPoints.instanceColor) {
+    if (matricesChanged) {
+      handles.materialPoints.instanceMatrix.needsUpdate = true;
+    }
+    if (colorsChanged && handles.materialPoints.instanceColor) {
       handles.materialPoints.instanceColor.needsUpdate = true;
     }
+    handles.voxelVisualMode = fieldMode;
+    handles.voxelPitchKey = pitchKey;
     handles.materialPoints.visible = visible;
     const material = handles.materialPoints.material as THREE.MeshBasicMaterial;
     material.opacity =
@@ -528,35 +604,26 @@ export default function LabViewport({
   useEffect(() => {
     const handles = handlesRef.current;
     if (!handles) return;
-    handles.path.geometry.setDrawRange(
-      0,
-      lineSegmentDrawCount(
-        handles.path.geometry.getAttribute("position")?.count ?? 0,
-        progress,
-      ),
-    );
-    const material = handles.path.material as THREE.LineBasicMaterial;
-    material.opacity = voxelPathOpacity(stage, progress);
+    handles.path.userData.targetProgress = progress;
+    handles.path.userData.stage = stage;
+    if (progress <= 0 || (stage !== "exposing" && stage !== "paused")) {
+      handles.path.userData.currentProgress = progress;
+    }
   }, [pathPositions, progress, stage]);
 
   useEffect(() => {
     const handles = handlesRef.current;
     if (!handles) return;
-    handles.focus.position.set(...focus);
-    handles.focusHalo.position.set(...focus);
-    handles.lensBox.position.set(...focus);
+    const focusTarget = handles.focus.userData.targetPosition as THREE.Vector3;
+    focusTarget.set(...focus);
     if (!opticsPreview) {
-      handles.beam.position.set(focus[0], focus[1], focus[2] + 8.5);
+      handles.beam.userData.focusOffsetZ = 8.5;
       return;
     }
 
     const beam = beamConeDimensions(opticsPreview.coneHalfAngleRad);
     handles.beam.scale.set(beam.radius, beam.length, beam.radius);
-    handles.beam.position.set(
-      focus[0],
-      focus[1],
-      focus[2] + beam.centerOffsetZ,
-    );
+    handles.beam.userData.focusOffsetZ = beam.centerOffsetZ;
     handles.focus.userData.targetScale = new THREE.Vector3(
       ...opticsPreview.fwhmRadiiUm,
     );

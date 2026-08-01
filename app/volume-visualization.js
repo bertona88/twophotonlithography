@@ -30,6 +30,17 @@ export function voxelActivity(
 }
 
 /**
+ * Quantize visual activity so sub-byte chemistry noise does not rebuild an
+ * instanced voxel matrix that would render identically.
+ *
+ * @param {number} activity
+ * @returns {number}
+ */
+export function quantizeVoxelActivity(activity) {
+  return Math.round(clamp01(activity) * 255);
+}
+
+/**
  * Return an even vertex count so THREE.LineSegments never draws half of the
  * next authoritative scan segment while exposure progress advances.
  *

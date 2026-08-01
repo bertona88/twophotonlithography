@@ -746,7 +746,7 @@ function ReactionLens({
         </span>
         <span>
           <strong>{formatMemory(volumeDiagnostics?.ownedMemoryBytes ?? 0)}</strong>
-          {`${updatesPerSecond.toFixed(0)} volume updates/s`}
+          {`${updatesPerSecond.toFixed(0)} solver steps/s`}
         </span>
         <span>
           <strong>{formatMemory(wasmMemoryBytes)}</strong>

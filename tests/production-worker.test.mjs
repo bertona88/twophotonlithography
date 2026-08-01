@@ -89,7 +89,7 @@ function postAndWait(worker, message, predicate, description) {
   return response;
 }
 
-test("production worker initializes browser Wasm and honors its message contract", async () => {
+test("production worker initializes browser Wasm and honors its message contract", async (t) => {
   const workerPath = await productionWorkerPath();
   const worker = new Worker(
     new URL("./helpers/production-worker-shim.mjs", import.meta.url),
@@ -295,6 +295,8 @@ test("production worker initializes browser Wasm and honors its message contract
       "a changed speed must refresh the authoritative exposure estimate",
     );
 
+    let exposureActiveMilliseconds = 0;
+    let exposureSegmentStartedAt = performance.now();
     const exposing = await postAndWait(
       worker,
       { type: "start" },
@@ -319,8 +321,10 @@ test("production worker initializes browser Wasm and honors its message contract
       (message) => message.type === "snapshot" && message.stage === "paused",
       "the paused exposure snapshot",
     );
+    exposureActiveMilliseconds += performance.now() - exposureSegmentStartedAt;
     assert.ok(paused.exposureProgress > 0 && paused.exposureProgress < 1);
 
+    exposureSegmentStartedAt = performance.now();
     const resumed = await postAndWait(
       worker,
       { type: "resume" },
@@ -336,6 +340,14 @@ test("production worker initializes browser Wasm and honors its message contract
         message.stage === "paused" &&
         message.exposureProgress === 1,
       "exposure completion",
+    );
+    exposureActiveMilliseconds += performance.now() - exposureSegmentStartedAt;
+    t.diagnostic(
+      `full-volume exposure active wall time ${exposureActiveMilliseconds.toFixed(0)} ms`,
+    );
+    assert.ok(
+      exposureActiveMilliseconds < 10_000,
+      "the time-sliced production exposure must complete within its worker budget",
     );
     assert.equal(
       exposureComplete.volumeDiagnostics.exposureStep,

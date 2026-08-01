@@ -12,6 +12,7 @@ export class WholeVolumeSimulation {
     development_progress(): number;
     exposure_progress(): number;
     focus(): Float32Array;
+    get_cached_diagnostics(): any;
     get_diagnostics(): any;
     /**
      * Physical Z coordinate of every emitted scan layer (f32 elements).
@@ -71,6 +72,7 @@ export interface InitOutput {
     readonly wholevolumesimulation_exposure_progress: (a: number) => number;
     readonly wholevolumesimulation_development_progress: (a: number) => number;
     readonly wholevolumesimulation_get_diagnostics: (a: number, b: number) => void;
+    readonly wholevolumesimulation_get_cached_diagnostics: (a: number, b: number) => void;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_add_to_stack_pointer: (a: number) => number;

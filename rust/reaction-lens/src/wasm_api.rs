@@ -114,8 +114,14 @@ impl WholeVolumeSimulation {
         self.inner.development_progress()
     }
 
-    pub fn get_diagnostics(&self) -> Result<JsValue, JsValue> {
+    pub fn get_diagnostics(&mut self) -> Result<JsValue, JsValue> {
         let diagnostics: VolumeDiagnostics = self.inner.diagnostics();
+        serde_wasm_bindgen::to_value(&diagnostics)
+            .map_err(|error| js_error(format!("could not serialize volume diagnostics: {error}")))
+    }
+
+    pub fn get_cached_diagnostics(&self) -> Result<JsValue, JsValue> {
+        let diagnostics: VolumeDiagnostics = self.inner.cached_diagnostics();
         serde_wasm_bindgen::to_value(&diagnostics)
             .map_err(|error| js_error(format!("could not serialize volume diagnostics: {error}")))
     }

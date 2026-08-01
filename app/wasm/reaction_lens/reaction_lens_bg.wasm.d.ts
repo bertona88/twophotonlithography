@@ -23,6 +23,7 @@ export const wholevolumesimulation_focus: (a: number, b: number) => void;
 export const wholevolumesimulation_exposure_progress: (a: number) => number;
 export const wholevolumesimulation_development_progress: (a: number) => number;
 export const wholevolumesimulation_get_diagnostics: (a: number, b: number) => void;
+export const wholevolumesimulation_get_cached_diagnostics: (a: number, b: number) => void;
 export const __wbindgen_export: (a: number, b: number) => number;
 export const __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
 export const __wbindgen_add_to_stack_pointer: (a: number) => number;
