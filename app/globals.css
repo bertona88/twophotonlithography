@@ -137,7 +137,7 @@ input:focus-visible {
 .lab-viewport-fallback {
   position: absolute;
   top: 50%;
-  left: 326px;
+  left: 50%;
   display: flex;
   width: min(390px, calc(100% - 40px));
   align-items: center;
@@ -662,7 +662,7 @@ input:focus-visible {
   position: absolute;
   z-index: 9;
   top: 88px;
-  left: 50%;
+  left: 326px;
   display: flex;
   align-items: center;
   padding: 4px;
@@ -2006,6 +2006,7 @@ input:focus-visible {
     top: calc(66px + var(--safe-top));
     left: 50%;
     width: calc(100vw - 20px - var(--safe-left) - var(--safe-right));
+    max-width: none;
     grid-template-columns: repeat(4, 1fr);
     display: grid;
     padding: 3px;
