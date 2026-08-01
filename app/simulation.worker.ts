@@ -1,5 +1,5 @@
 import initReactionLens, {
-  ReactionLensSimulation,
+  preview_volume_psf,
   WholeVolumeSimulation,
 } from "./wasm/reaction_lens/reaction_lens.js";
 import reactionLensWasmUrl from "./wasm/reaction_lens/reaction_lens_bg.wasm?url";
@@ -45,6 +45,13 @@ type ModelParams = {
 type Incoming =
   | { type: "slice"; params: ModelParams }
   | { type: "configure"; params: ModelParams }
+  | { type: "inspectSlice"; zUm: number }
+  | {
+      type: "previewOptics";
+      na: number;
+      wavelength: number;
+      requestId: number;
+    }
   | { type: "start" }
   | { type: "pause" }
   | { type: "resume" }
@@ -56,17 +63,10 @@ const scope = self as unknown as {
   postMessage: (message: unknown, transfer?: Transferable[]) => void;
 };
 
-const GRID_W = 112;
-const GRID_H = 68;
-const GRID_N = GRID_W * GRID_H;
-const SNAPSHOT_FIELD_COUNT = 6;
-const SNAPSHOT_LEN = GRID_N * SNAPSHOT_FIELD_COUNT;
-const DT_MODEL = 0.016;
-const SEED = 0x07a1;
+const XY_SLICE_FIELD_COUNT = 5;
 const MAX_PENDING_MESSAGES = 64;
 const MIN_LAYER_HEIGHT_UM = 0.25;
 const MIN_HATCH_SPACING_UM = 0.25;
-const LENS_CELL_SIZE_NM = Math.round((15 / (GRID_W - 1)) * 1000);
 const TOOLPATH_PARAMETER_KEYS = [
   "layerHeight",
   "hatchSpacing",
@@ -77,33 +77,6 @@ const TOOLPATH_PARAMETER_KEYS = [
 ] as const satisfies readonly (keyof ModelParams)[];
 
 type SolverState = "initializing" | "ready" | "error";
-
-type RustDiagnostics = {
-  solver: string;
-  gridWidth: number;
-  gridHeight: number;
-  fieldCount: number;
-  fieldOrder: string[];
-  timestepModelTime?: number;
-  timestepSeconds?: number;
-  exposureStep: number;
-  exposureStepsTotal: number;
-  developmentStep: number;
-  developmentStepsTotal: number;
-  exposureSimulatedModelTime?: number;
-  exposureSimulatedTimeSeconds?: number;
-  darkSimulatedModelTime?: number;
-  developmentSimulatedModelTime?: number;
-  developmentSimulatedTimeSeconds?: number;
-  simulatedModelTime?: number;
-  simulatedTimeSeconds?: number;
-  lightUpdates?: number;
-  darkUpdates?: number;
-  totalUpdates: number;
-  seed: number;
-  checksum: string;
-  ownedMemoryBytes: number;
-};
 
 type VolumeDiagnostics = {
   solver: string;
@@ -118,6 +91,7 @@ type VolumeDiagnostics = {
   psfModel: string;
   psfPupilSamples: number;
   psfKernelVoxels: number;
+  psfPreview: PsfPreview;
   scanPoints: number;
   layerCount: number;
   pathLengthUm: number;
@@ -141,11 +115,28 @@ type VolumeDiagnostics = {
   checksum: string;
 };
 
+type PsfPreview = {
+  model: string;
+  qualityTier: string;
+  pupilSamples: number;
+  kernelVoxels: number;
+  na: number;
+  wavelengthNm: number;
+  coneHalfAngleRad: number;
+  fwhmRadiiUm: [number, number, number];
+  tenthMaxRadiiUm: [number, number, number];
+};
+
 type VolumeGeometryExports = WholeVolumeSimulation & {
   get_scan_path(): number;
   scan_path_len(): number;
   get_layer_positions(): number;
   layer_positions_len(): number;
+  get_xy_slice(zUm: number): number;
+  xy_slice_len(): number;
+  xy_slice_width(): number;
+  xy_slice_height(): number;
+  xy_slice_z_um(): number;
 };
 
 type VolumeSnapshot = {
@@ -164,7 +155,6 @@ let exposureStep = 0;
 let exposureStepsTotal = 1;
 let developmentStep = 0;
 let developmentStepsTotal = 1;
-let lensSimulation: ReactionLensSimulation | null = null;
 let volumeSimulation: WholeVolumeSimulation | null = null;
 let benchyOccupancy: Uint8Array | null = null;
 let wasmMemory: WebAssembly.Memory | null = null;
@@ -174,6 +164,7 @@ const pendingMessages: Incoming[] = [];
 let rateWindowStartedAt = performance.now();
 let rateWindowUpdates = 0;
 let updatesPerSecond = 0;
+let inspectedZUm = 0;
 
 let linePositions = new Float32Array(0);
 let layerPositions = new Float32Array(0);
@@ -245,13 +236,6 @@ function toolpathParametersChanged(next: ModelParams) {
   );
 }
 
-function requireLensSimulation() {
-  if (!lensSimulation) {
-    throw new Error("Rust/Wasm simulation has not been configured");
-  }
-  return lensSimulation;
-}
-
 function requireVolumeSimulation() {
   if (!volumeSimulation) {
     throw new Error("Rust/Wasm 3D volume has not been configured");
@@ -285,20 +269,9 @@ function configureVolume(next: ModelParams) {
   );
 }
 
-function applyLensParameters(next: ModelParams) {
+function configureSimulation(next: ModelParams) {
   validateWorkerParameters(next);
   configureVolume(next);
-  if (lensSimulation) {
-    lensSimulation.set_parameters(next);
-    return;
-  }
-  lensSimulation = new ReactionLensSimulation(
-    {
-      exposureStepsTotal: Math.max(1, exposureStepsTotal),
-      parameters: next,
-    },
-    SEED,
-  );
 }
 
 function resetUpdateRate() {
@@ -319,37 +292,6 @@ function recordSimulationUpdates(count: number) {
     rateWindowStartedAt = now;
     rateWindowUpdates = 0;
   }
-}
-
-function normalizedDiagnostics(raw: RustDiagnostics) {
-  const timestepModel =
-    raw.timestepModelTime ?? raw.timestepSeconds ?? DT_MODEL;
-  const exposureSimulatedModelTime =
-    raw.exposureSimulatedModelTime ??
-    raw.exposureSimulatedTimeSeconds ??
-    raw.exposureStep * timestepModel;
-  const darkSimulatedModelTime = raw.darkSimulatedModelTime ?? 0;
-  const developmentSimulatedModelTime =
-    raw.developmentSimulatedModelTime ??
-    raw.developmentSimulatedTimeSeconds ??
-    0;
-  const simulatedModelTime =
-    raw.simulatedModelTime ??
-    raw.simulatedTimeSeconds ??
-    exposureSimulatedModelTime +
-      darkSimulatedModelTime +
-      developmentSimulatedModelTime;
-
-  return {
-    ...raw,
-    timestepModel,
-    exposureSimulatedModelTime,
-    darkSimulatedModelTime,
-    developmentSimulatedModelTime,
-    simulatedModelTime,
-    updatesPerSecond,
-    wasmMemoryBytes: wasmMemory?.buffer.byteLength ?? 0,
-  };
 }
 
 function copyWasmFloat32Export(
@@ -408,13 +350,16 @@ function readVolumeGeometry(diagnostics: VolumeDiagnostics) {
 }
 
 function sliceBenchy(next: ModelParams) {
-  applyLensParameters(next);
+  configureSimulation(next);
   params = next;
   stage = "slicing";
   resetFields();
   const volumeSnapshot = readVolumeSnapshot();
   const { diagnostics: volumeDiagnostics } = volumeSnapshot;
   readVolumeGeometry(volumeDiagnostics);
+  inspectedZUm =
+    layerPositions[Math.max(0, Math.floor(layerPositions.length * 0.43))] ??
+    volumeDiagnostics.voxelPitchUm[2];
   stage = "ready";
   sequence += 1;
 
@@ -446,9 +391,6 @@ function resetFields() {
   developmentStep = 0;
   exposureStepsTotal = volumeDiagnostics.exposureStepsTotal;
   developmentStepsTotal = volumeDiagnostics.developmentStepsTotal;
-  const simulation = requireLensSimulation();
-  simulation.set_exposure_steps_total(exposureStepsTotal);
-  simulation.reset(SEED);
   resetUpdateRate();
   return volumeDiagnostics;
 }
@@ -461,7 +403,6 @@ function runExposureBatch() {
   );
   const advancedSteps =
     requireVolumeSimulation().advance_exposure_steps(requestedSteps);
-  requireLensSimulation().advance_exposure_steps(advancedSteps);
   exposureStep += advancedSteps;
   recordSimulationUpdates(advancedSteps);
 
@@ -481,20 +422,7 @@ function runDevelopmentBatch() {
   const advancedSteps =
     requireVolumeSimulation().advance_development_steps(requestedSteps);
   developmentStep += advancedSteps;
-  const volumeDevelopmentProgress =
-    developmentStep / Math.max(1, developmentStepsTotal);
-  const lens = requireLensSimulation();
-  const lensDiagnostics = lens.get_diagnostics() as RustDiagnostics;
-  const lensDevelopmentTarget =
-    developmentStep >= developmentStepsTotal
-      ? lensDiagnostics.developmentStepsTotal
-      : Math.floor(
-          volumeDevelopmentProgress * lensDiagnostics.developmentStepsTotal,
-        );
-  const lensAdvancedSteps = lens.advance_development_steps(
-    Math.max(0, lensDevelopmentTarget - lensDiagnostics.developmentStep),
-  );
-  recordSimulationUpdates(lensAdvancedSteps);
+  recordSimulationUpdates(advancedSteps);
 
   if (developmentStep >= developmentStepsTotal) {
     stage = "complete";
@@ -542,84 +470,83 @@ function runScheduledCommand(command: string, callback: () => void) {
   }
 }
 
-function readLensSnapshot() {
-  const simulation = requireLensSimulation();
+function readXYSlice(volumeDiagnostics: VolumeDiagnostics) {
+  const volume = requireVolumeSimulation() as VolumeGeometryExports;
   if (!wasmMemory) {
     throw new Error("Rust/Wasm memory is unavailable");
   }
 
-  const pointer = simulation.get_snapshot();
-  const snapshotLength = simulation.snapshot_len();
-  if (snapshotLength !== SNAPSHOT_LEN) {
+  const pointer = volume.get_xy_slice(inspectedZUm);
+  const snapshotLength = volume.xy_slice_len();
+  const width = volume.xy_slice_width();
+  const height = volume.xy_slice_height();
+  const cellCount = width * height;
+  if (snapshotLength !== cellCount * XY_SLICE_FIELD_COUNT) {
     throw new Error(
-      `Rust/Wasm snapshot length ${snapshotLength} does not match ${SNAPSHOT_LEN}`,
+      "Rust/Wasm XY slice does not use the five-field plane contract",
     );
   }
 
   // wasm-bindgen may grow (and therefore replace) the memory buffer. Reacquire
-  // it after get_snapshot(), then copy only into JS-owned storage. The main
+  // it after get_xy_slice(), then copy only into JS-owned storage. The main
   // thread never receives a view into authoritative Wasm state.
   const memoryBuffer = wasmMemory.buffer;
   if (
     pointer + snapshotLength * Float32Array.BYTES_PER_ELEMENT >
     memoryBuffer.byteLength
   ) {
-    throw new Error("Rust/Wasm snapshot points outside linear memory");
+    throw new Error("Rust/Wasm XY slice points outside linear memory");
   }
   const fields = new Float32Array(memoryBuffer, pointer, snapshotLength);
-  const oxygenScale = Math.max(1e-6, params.oxygen);
-  const lens = new Uint8Array(GRID_N * 4);
-  const oxygenOffset = GRID_N;
-  const radicalOffset = GRID_N * 2;
-  const conversionOffset = GRID_N * 3;
-  const massOffset = GRID_N * 5;
+  const pixels = new Uint8Array(cellCount * XY_SLICE_FIELD_COUNT);
   let oxygenMean = 0;
   let conversionMean = 0;
   let radicalMax = 0;
   let gelled = 0;
   let surviving = 0;
+  let targetCells = 0;
 
-  for (let index = 0; index < GRID_N; index += 1) {
-    const oxygen = fields[oxygenOffset + index];
-    const radical = fields[radicalOffset + index];
-    const conversion = fields[conversionOffset + index];
-    const remainingMass = fields[massOffset + index];
-    lens[index * 4] = Math.round(
-      clamp(oxygen / oxygenScale) * 255,
-    );
-    lens[index * 4 + 1] = Math.round(
+  for (let index = 0; index < cellCount; index += 1) {
+    const source = index * XY_SLICE_FIELD_COUNT;
+    const oxygen = fields[source];
+    const radical = fields[source + 1];
+    const conversion = fields[source + 2];
+    const remainingMass = fields[source + 3];
+    const occupied = fields[source + 4] >= 0.5;
+    pixels[source] = Math.round(clamp(oxygen) * 255);
+    pixels[source + 1] = Math.round(
       clamp(Math.log1p(radical) / Math.log(5)) * 255,
     );
-    lens[index * 4 + 2] = Math.round(clamp(conversion) * 255);
-    lens[index * 4 + 3] = Math.round(clamp(remainingMass) * 255);
-    oxygenMean += oxygen / oxygenScale;
+    pixels[source + 2] = Math.round(clamp(conversion) * 255);
+    pixels[source + 3] = Math.round(clamp(remainingMass) * 255);
+    pixels[source + 4] = occupied ? 255 : 0;
+    if (!occupied) continue;
+    targetCells += 1;
+    oxygenMean += oxygen;
     conversionMean += conversion;
     radicalMax = Math.max(radicalMax, radical);
     if (conversion >= params.gelPoint) gelled += 1;
     if (remainingMass >= 0.5) surviving += 1;
   }
 
-  const diagnostics = normalizedDiagnostics(
-    simulation.get_diagnostics() as RustDiagnostics,
-  );
-  if (
-    diagnostics.gridWidth !== GRID_W ||
-    diagnostics.gridHeight !== GRID_H ||
-    diagnostics.fieldCount !== SNAPSHOT_FIELD_COUNT
-  ) {
-    throw new Error(
-      "Rust/Wasm diagnostics do not match the worker snapshot contract",
-    );
-  }
+  const denominator = Math.max(1, targetCells);
+  inspectedZUm = volume.xy_slice_z_um();
   return {
-    lens,
-    diagnostics,
-    lensStatistics: {
-      oxygenMean: oxygenMean / GRID_N,
-      conversionMean: conversionMean / GRID_N,
+    pixels,
+    width,
+    height,
+    zUm: inspectedZUm,
+    metrics: {
+      oxygenMean: oxygenMean / denominator,
+      conversionMean: conversionMean / denominator,
       radicalMax,
-      gelledFraction: gelled / GRID_N,
-      survivingFraction: surviving / GRID_N,
+      gelledFraction: gelled / denominator,
+      survivingFraction: surviving / denominator,
+      targetCells,
+      voxelPitchNm: [
+        Math.round(volumeDiagnostics.voxelPitchUm[0] * 1000),
+        Math.round(volumeDiagnostics.voxelPitchUm[1] * 1000),
+      ],
     },
   };
 }
@@ -672,7 +599,6 @@ function readVolumeSnapshot() {
 }
 
 function emitSnapshot(volumeSnapshot?: VolumeSnapshot) {
-  const { lens, diagnostics, lensStatistics } = readLensSnapshot();
   const currentVolumeSnapshot = volumeSnapshot ?? readVolumeSnapshot();
   const {
     diagnostics: volumeDiagnostics,
@@ -681,6 +607,7 @@ function emitSnapshot(volumeSnapshot?: VolumeSnapshot) {
     radicals,
     remaining,
   } = currentVolumeSnapshot;
+  const slice = readXYSlice(volumeDiagnostics);
   const exposureProgress = requireVolumeSimulation().exposure_progress();
   const developmentProgress = requireVolumeSimulation().development_progress();
   const focus = Array.from(requireVolumeSimulation().focus());
@@ -713,26 +640,23 @@ function emitSnapshot(volumeSnapshot?: VolumeSnapshot) {
       developmentProgress,
       simulatedSeconds: volumeDiagnostics.simulatedTimeSeconds,
       focus,
-      lens: lens.buffer,
-      lensWidth: GRID_W,
-      lensHeight: GRID_H,
+      slicePixels: slice.pixels.buffer,
+      sliceWidth: slice.width,
+      sliceHeight: slice.height,
+      sliceZUm: slice.zUm,
+      sliceMetrics: slice.metrics,
       conversion: conversion.buffer,
       oxygen: oxygen.buffer,
       radicals: radicals.buffer,
       remaining: remaining.buffer,
-      diagnostics,
-      lensDiagnostics: diagnostics,
       volumeDiagnostics,
-      lensMetrics: {
-        ...lensStatistics,
-        cellSizeNm: LENS_CELL_SIZE_NM,
-        timestepModel: diagnostics.timestepModel,
-      },
+      updatesPerSecond,
+      wasmMemoryBytes: wasmMemory?.buffer.byteLength ?? 0,
       metrics: volumeMetrics,
       volumeMetrics,
     },
     [
-      lens.buffer,
+      slice.pixels.buffer,
       conversion.buffer,
       oxygen.buffer,
       radicals.buffer,
@@ -741,10 +665,45 @@ function emitSnapshot(volumeSnapshot?: VolumeSnapshot) {
   );
 }
 
+function emitSliceInspection() {
+  const volumeDiagnostics =
+    requireVolumeSimulation().get_diagnostics() as VolumeDiagnostics;
+  const slice = readXYSlice(volumeDiagnostics);
+  post(
+    {
+      type: "sliceInspection",
+      slicePixels: slice.pixels.buffer,
+      sliceWidth: slice.width,
+      sliceHeight: slice.height,
+      sliceZUm: slice.zUm,
+      sliceMetrics: slice.metrics,
+      volumeChecksum: volumeDiagnostics.checksum,
+    },
+    [slice.pixels.buffer],
+  );
+}
+
 function processMessage(message: Incoming) {
+  if (message.type === "previewOptics") {
+    const preview = preview_volume_psf(
+      message.na,
+      message.wavelength,
+      memoryBudgetBytes(),
+    ) as PsfPreview;
+    post({ type: "opticsPreview", requestId: message.requestId, preview });
+    return;
+  }
   if (message.type === "slice") {
     stopTimer();
     sliceBenchy(message.params);
+    return;
+  }
+  if (message.type === "inspectSlice") {
+    if (!Number.isFinite(message.zUm)) {
+      throw new Error("Slice Z position must be finite");
+    }
+    inspectedZUm = message.zUm;
+    emitSliceInspection();
     return;
   }
   if (message.type === "configure") {
@@ -753,7 +712,7 @@ function processMessage(message: Incoming) {
       sliceBenchy(message.params);
       return;
     }
-    applyLensParameters(message.params);
+    configureSimulation(message.params);
     params = message.params;
     resetFields();
     stage = macroPositions.length ? "ready" : "model";
@@ -863,17 +822,7 @@ async function initializeSolver() {
       type: "solverStatus",
       status: "ready",
       solver: "Rust/Wasm",
-      diagnostics: {
-        solver: "Rust/Wasm",
-        gridWidth: GRID_W,
-        gridHeight: GRID_H,
-        timestepModel: DT_MODEL,
-        updatesPerSecond: 0,
-        simulatedModelTime: 0,
-        ownedMemoryBytes: 0,
-        wasmMemoryBytes: memory.buffer.byteLength,
-        checksum: "00000000",
-      },
+      wasmMemoryBytes: memory.buffer.byteLength,
     });
 
     const queuedMessages = pendingMessages.splice(0);

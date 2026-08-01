@@ -6,6 +6,7 @@ use crate::{Parameters, ValidationError};
 const BASE_DIMS: [usize; 3] = [128, 72, 104];
 const BASE_ORIGIN_UM: [f64; 3] = [-11.357_723_577, -6.023_313_349, -0.175_549_622];
 const BASE_PITCH_UM: [f64; 3] = [0.178_861_789, 0.169_670_799, 0.177_774_811];
+const REFRACTIVE_INDEX: f64 = 1.52;
 const MAX_RENDER_VOXELS: usize = 60_000;
 const TARGET_RENDER_VOXELS: usize = 45_000;
 const RENDER_HALO_PASSES: usize = 4;
@@ -15,12 +16,29 @@ const MAX_RADICAL_ACTIVITY: f64 = 8.0;
 const DIFFUSION_COURANT_SAFETY: f64 = 0.45;
 const MIN_VOLUME_MEMORY_BUDGET_BYTES: usize = 8 * 1024 * 1024;
 const MAX_VOLUME_DIFFUSION_SUBSTEPS_PER_BUCKET: usize = 1_024;
+const XY_SLICE_FIELD_COUNT: usize = 5;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WholeVolumeConfig {
     pub parameters: Parameters,
     pub memory_budget_bytes: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PsfPreview {
+    pub model: &'static str,
+    pub quality_tier: &'static str,
+    pub pupil_samples: usize,
+    pub kernel_voxels: usize,
+    pub na: f64,
+    pub wavelength_nm: f64,
+    pub cone_half_angle_rad: f64,
+    /// Half-widths of the normalized two-photon PSF at 50% peak intensity.
+    pub fwhm_radii_um: [f64; 3],
+    /// Half-widths of the normalized two-photon PSF at 10% peak intensity.
+    pub tenth_max_radii_um: [f64; 3],
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,6 +56,7 @@ pub struct VolumeDiagnostics {
     pub psf_model: &'static str,
     pub psf_pupil_samples: usize,
     pub psf_kernel_voxels: usize,
+    pub psf_preview: PsfPreview,
     pub scan_points: usize,
     pub layer_count: usize,
     pub path_length_um: f64,
@@ -166,7 +185,10 @@ pub struct WholeVolumeSimulation {
     layer_positions: Vec<f32>,
     render_indices: Vec<usize>,
     render_snapshot: Vec<f32>,
+    xy_slice_snapshot: Vec<f32>,
+    xy_slice_z_um: f32,
     psf_kernel: Vec<KernelVoxel>,
+    psf_preview: PsfPreview,
     exposure_step: u32,
     exposure_steps_total: u32,
     development_step: u32,
@@ -199,11 +221,7 @@ impl WholeVolumeSimulation {
         let tier = select_tier(config.memory_budget_bytes);
         let dims = tier.dims;
         let len = dims[0] * dims[1] * dims[2];
-        let pitch_um = [
-            BASE_PITCH_UM[0] * (BASE_DIMS[0] - 1) as f64 / (dims[0] - 1) as f64,
-            BASE_PITCH_UM[1] * (BASE_DIMS[1] - 1) as f64 / (dims[1] - 1) as f64,
-            BASE_PITCH_UM[2] * (BASE_DIMS[2] - 1) as f64 / (dims[2] - 1) as f64,
-        ];
+        let pitch_um = tier_pitch(tier);
         let occupancy = resample_occupancy(base_occupancy, dims);
         let parameters = config.parameters;
         let scan_schedule =
@@ -228,7 +246,15 @@ impl WholeVolumeSimulation {
             target_developer_depths(&occupancy, &occupied_render_indices, dims, pitch_um);
         let scan_path_segments =
             build_scan_path_segments(&scan_schedule.path, dims, BASE_ORIGIN_UM, pitch_um);
-        let mut simulation = Self {
+        let psf_kernel = build_vectorial_psf(parameters.na, parameters.wavelength, tier, pitch_um);
+        let psf_preview = summarize_psf(
+            &psf_kernel,
+            parameters.na,
+            parameters.wavelength,
+            tier,
+            pitch_um,
+        );
+        let simulation = Self {
             photoinitiator: vec![parameters.initiator as f32; len],
             oxygen: vec![parameters.oxygen as f32; len],
             radicals: vec![0.0; len],
@@ -244,7 +270,10 @@ impl WholeVolumeSimulation {
             active_frontier: Vec::with_capacity((len / 64).max(256)),
             spare_frontier: Vec::with_capacity((len / 64).max(256)),
             render_snapshot: vec![0.0; render_indices.len() * 7],
-            psf_kernel: Vec::new(),
+            xy_slice_snapshot: vec![0.0; dims[0] * dims[1] * XY_SLICE_FIELD_COUNT],
+            xy_slice_z_um: BASE_ORIGIN_UM[2] as f32,
+            psf_kernel,
+            psf_preview,
             exposure_step: 0,
             exposure_steps_total: schedule_steps(scan_schedule.path.len(), parameters.passes),
             development_step: 0,
@@ -267,7 +296,6 @@ impl WholeVolumeSimulation {
             layer_positions: scan_schedule.layer_positions,
             render_indices,
         };
-        simulation.rebuild_psf();
         Ok(simulation)
     }
 
@@ -634,6 +662,13 @@ impl WholeVolumeSimulation {
             self.tier,
             self.pitch_um,
         );
+        self.psf_preview = summarize_psf(
+            &self.psf_kernel,
+            self.parameters.na,
+            self.parameters.wavelength,
+            self.tier,
+            self.pitch_um,
+        );
     }
 
     fn xyz(&self, index: usize) -> [f64; 3] {
@@ -674,6 +709,45 @@ impl WholeVolumeSimulation {
         self.render_snapshot.len()
     }
 
+    /// Packed authoritative XY chemistry plane at the grid layer nearest
+    /// `requested_z_um`. Each cell contains normalized oxygen, raw radical
+    /// activity, conversion, remaining mass, and target occupancy.
+    pub fn xy_slice_snapshot(&mut self, requested_z_um: f64) -> &[f32] {
+        let z = ((requested_z_um - self.origin_um[2]) / self.pitch_um[2])
+            .round()
+            .clamp(0.0, (self.dims[2] - 1) as f64) as usize;
+        self.xy_slice_z_um = (self.origin_um[2] + z as f64 * self.pitch_um[2]) as f32;
+        let oxygen_scale = self.parameters.oxygen.max(1e-9) as f32;
+        let plane_len = self.dims[0] * self.dims[1];
+        let plane_start = z * plane_len;
+        for plane_index in 0..plane_len {
+            let index = plane_start + plane_index;
+            let output = plane_index * XY_SLICE_FIELD_COUNT;
+            self.xy_slice_snapshot[output] = (self.oxygen[index] / oxygen_scale).clamp(0.0, 1.0);
+            self.xy_slice_snapshot[output + 1] = self.radicals[index];
+            self.xy_slice_snapshot[output + 2] = self.conversion[index];
+            self.xy_slice_snapshot[output + 3] = self.remaining[index];
+            self.xy_slice_snapshot[output + 4] = if self.occupancy[index] != 0 { 1.0 } else { 0.0 };
+        }
+        &self.xy_slice_snapshot
+    }
+
+    pub fn xy_slice_len(&self) -> usize {
+        self.xy_slice_snapshot.len()
+    }
+
+    pub fn xy_slice_width(&self) -> usize {
+        self.dims[0]
+    }
+
+    pub fn xy_slice_height(&self) -> usize {
+        self.dims[1]
+    }
+
+    pub fn xy_slice_z_um(&self) -> f32 {
+        self.xy_slice_z_um
+    }
+
     /// Packed illuminated XYZXYZ segments for the authoritative scan schedule.
     pub fn scan_path_segments(&self) -> &[f32] {
         &self.scan_path_segments
@@ -705,6 +779,7 @@ impl WholeVolumeSimulation {
             + self.layer_positions.capacity() * std::mem::size_of::<f32>()
             + self.render_indices.capacity() * std::mem::size_of::<usize>()
             + self.render_snapshot.capacity() * std::mem::size_of::<f32>()
+            + self.xy_slice_snapshot.capacity() * std::mem::size_of::<f32>()
             + self.psf_kernel.capacity() * std::mem::size_of::<KernelVoxel>();
         let path_length_um = packed_segment_length(&self.scan_path_segments);
         let denominator = self.occupied_indices.len().max(1) as f64;
@@ -752,6 +827,7 @@ impl WholeVolumeSimulation {
             psf_model: "vectorial Debye / circular polarization / two-photon I²",
             psf_pupil_samples: self.tier.theta_samples * self.tier.phi_samples,
             psf_kernel_voxels: self.psf_kernel.len(),
+            psf_preview: self.psf_preview.clone(),
             scan_points: self.scan_path.len(),
             layer_count: self.layer_positions.len(),
             path_length_um,
@@ -799,6 +875,35 @@ fn select_tier(memory_budget_bytes: usize) -> Tier {
         .copied()
         .find(|candidate| memory_budget_bytes >= candidate.memory_floor)
         .unwrap_or(TIERS[3])
+}
+
+fn tier_pitch(tier: Tier) -> [f64; 3] {
+    [
+        BASE_PITCH_UM[0] * (BASE_DIMS[0] - 1) as f64 / (tier.dims[0] - 1) as f64,
+        BASE_PITCH_UM[1] * (BASE_DIMS[1] - 1) as f64 / (tier.dims[1] - 1) as f64,
+        BASE_PITCH_UM[2] * (BASE_DIMS[2] - 1) as f64 / (tier.dims[2] - 1) as f64,
+    ]
+}
+
+pub fn preview_vectorial_psf(
+    na: f64,
+    wavelength_nm: f64,
+    memory_budget_bytes: usize,
+) -> Result<PsfPreview, ValidationError> {
+    if !na.is_finite() || na <= 0.0 {
+        return Err(ValidationError::new(
+            "na must be finite and greater than zero",
+        ));
+    }
+    if !wavelength_nm.is_finite() || wavelength_nm <= 0.0 {
+        return Err(ValidationError::new(
+            "wavelength must be finite and greater than zero",
+        ));
+    }
+    let tier = select_tier(memory_budget_bytes);
+    let pitch = tier_pitch(tier);
+    let kernel = build_vectorial_psf(na, wavelength_nm, tier, pitch);
+    Ok(summarize_psf(&kernel, na, wavelength_nm, tier, pitch))
 }
 
 fn resample_occupancy(base: &[u8], dims: [usize; 3]) -> Vec<u8> {
@@ -1397,14 +1502,13 @@ fn build_vectorial_psf(
     pitch: [f64; 3],
 ) -> Vec<KernelVoxel> {
     let wavelength_um = wavelength_nm * 1e-3;
-    let refractive_index = 1.52_f64;
-    let theta_max = (na / refractive_index).clamp(0.0, 0.999_999).asin();
+    let theta_max = (na / REFRACTIVE_INDEX).clamp(0.0, 0.999_999).asin();
     let lateral = 0.61 * wavelength_um / na.max(0.1);
-    let axial = 2.0 * refractive_index * wavelength_um / na.max(0.1).powi(2);
+    let axial = 2.0 * REFRACTIVE_INDEX * wavelength_um / na.max(0.1).powi(2);
     let rx = ((2.4 * lateral / pitch[0]).ceil() as isize).clamp(2, 10);
     let ry = ((2.4 * lateral / pitch[1]).ceil() as isize).clamp(2, 10);
     let rz = ((2.2 * axial / pitch[2]).ceil() as isize).clamp(3, 18);
-    let wave_number = TWO_PI * refractive_index / wavelength_um;
+    let wave_number = TWO_PI * REFRACTIVE_INDEX / wavelength_um;
     let inv_sqrt_two = 1.0 / 2.0_f64.sqrt();
     let mut raw = Vec::new();
     let mut peak = 0.0_f64;
@@ -1458,6 +1562,80 @@ fn build_vectorial_psf(
             (weight >= 0.0005).then_some(KernelVoxel { dx, dy, dz, weight })
         })
         .collect()
+}
+
+fn summarize_psf(
+    kernel: &[KernelVoxel],
+    na: f64,
+    wavelength_nm: f64,
+    tier: Tier,
+    pitch: [f64; 3],
+) -> PsfPreview {
+    PsfPreview {
+        model: "vectorial Debye / circular polarization / two-photon I²",
+        quality_tier: tier.name,
+        pupil_samples: tier.theta_samples * tier.phi_samples,
+        kernel_voxels: kernel.len(),
+        na,
+        wavelength_nm,
+        cone_half_angle_rad: (na / REFRACTIVE_INDEX).clamp(0.0, 0.999_999).asin(),
+        fwhm_radii_um: [
+            axis_isovalue_radius(kernel, 0, pitch[0], 0.5),
+            axis_isovalue_radius(kernel, 1, pitch[1], 0.5),
+            axis_isovalue_radius(kernel, 2, pitch[2], 0.5),
+        ],
+        tenth_max_radii_um: [
+            axis_isovalue_radius(kernel, 0, pitch[0], 0.1),
+            axis_isovalue_radius(kernel, 1, pitch[1], 0.1),
+            axis_isovalue_radius(kernel, 2, pitch[2], 0.1),
+        ],
+    }
+}
+
+fn axis_isovalue_radius(kernel: &[KernelVoxel], axis: usize, pitch_um: f64, target: f64) -> f64 {
+    let coordinate = |voxel: &KernelVoxel, component: usize| match component {
+        0 => voxel.dx,
+        1 => voxel.dy,
+        _ => voxel.dz,
+    };
+    let maximum_offset = kernel
+        .iter()
+        .filter(|voxel| {
+            (0..3).all(|component| component == axis || coordinate(voxel, component) == 0)
+        })
+        .map(|voxel| coordinate(voxel, axis).unsigned_abs())
+        .max()
+        .unwrap_or(1)
+        + 1;
+    let mut previous_offset = 0_usize;
+    let mut previous_weight = 1.0_f64;
+
+    for offset in 1..=maximum_offset {
+        let mut weight_sum = 0.0_f64;
+        let mut sample_count = 0_usize;
+        for voxel in kernel {
+            let on_axis =
+                (0..3).all(|component| component == axis || coordinate(voxel, component) == 0);
+            if on_axis && coordinate(voxel, axis).unsigned_abs() == offset {
+                weight_sum += voxel.weight as f64;
+                sample_count += 1;
+            }
+        }
+        let weight = if sample_count == 0 {
+            0.0
+        } else {
+            weight_sum / sample_count as f64
+        };
+        if weight <= target && previous_weight >= target {
+            let span = (previous_weight - weight).max(f64::EPSILON);
+            let fraction = ((previous_weight - target) / span).clamp(0.0, 1.0);
+            return (previous_offset as f64 + fraction) * pitch_um;
+        }
+        previous_offset = offset;
+        previous_weight = weight;
+    }
+
+    maximum_offset as f64 * pitch_um
 }
 
 fn flatten(x: usize, y: usize, z: usize, dims: [usize; 3]) -> usize {
@@ -1726,6 +1904,24 @@ mod tests {
             && sample.dy == 0
             && sample.dz == 0
             && sample.weight > 0.99));
+    }
+
+    #[test]
+    fn psf_preview_tracks_na_and_wavelength_from_the_debye_kernel() {
+        let lower_na = preview_vectorial_psf(0.9, 780.0, 64 * 1024 * 1024).unwrap();
+        let higher_na = preview_vectorial_psf(1.4, 780.0, 64 * 1024 * 1024).unwrap();
+        let longer_wavelength = preview_vectorial_psf(1.4, 1_064.0, 64 * 1024 * 1024).unwrap();
+
+        assert!(higher_na.cone_half_angle_rad > lower_na.cone_half_angle_rad);
+        assert!(higher_na.fwhm_radii_um[0] < lower_na.fwhm_radii_um[0]);
+        assert!(higher_na.fwhm_radii_um[2] < lower_na.fwhm_radii_um[2]);
+        assert!(longer_wavelength.fwhm_radii_um[0] > higher_na.fwhm_radii_um[0]);
+        assert!(longer_wavelength.fwhm_radii_um[2] > higher_na.fwhm_radii_um[2]);
+        assert!(higher_na
+            .fwhm_radii_um
+            .iter()
+            .chain(higher_na.tenth_max_radii_um.iter())
+            .all(|radius| radius.is_finite() && *radius > 0.0));
     }
 
     #[test]
@@ -2314,6 +2510,30 @@ mod tests {
         assert_eq!(diagnostics.off_target_gelled_fraction, 1.0);
         assert!(diagnostics.off_target_surviving_fraction > 0.0);
         assert!(simulation.remaining[spill] > 0.0);
+    }
+
+    #[test]
+    fn xy_slice_exports_the_requested_authoritative_volume_plane() {
+        let mut simulation = minimal_simulation(Parameters::default());
+        let index = simulation.occupied_indices[simulation.occupied_indices.len() / 2] as usize;
+        let [x, y, z] = index_to_ijk(index, simulation.dims);
+        simulation.oxygen[index] = 0.25 * simulation.parameters.oxygen as f32;
+        simulation.radicals[index] = 2.5;
+        simulation.conversion[index] = 0.625;
+        simulation.remaining[index] = 0.375;
+        let requested_z = simulation.origin_um[2] + z as f64 * simulation.pitch_um[2];
+        let width = simulation.dims[0];
+        let height = simulation.dims[1];
+
+        let slice = simulation.xy_slice_snapshot(requested_z).to_vec();
+        let base = (x + width * y) * XY_SLICE_FIELD_COUNT;
+        assert_eq!(slice.len(), width * height * XY_SLICE_FIELD_COUNT);
+        assert_eq!(slice[base], 0.25);
+        assert_eq!(slice[base + 1], 2.5);
+        assert_eq!(slice[base + 2], 0.625);
+        assert_eq!(slice[base + 3], 0.375);
+        assert_eq!(slice[base + 4], 1.0);
+        assert!((simulation.xy_slice_z_um() as f64 - requested_z).abs() < 1e-5);
     }
 
     #[test]

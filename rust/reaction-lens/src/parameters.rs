@@ -55,7 +55,7 @@ impl SimulationConfig {
     }
 }
 
-/// Adjustable parameters used by the existing TypeScript Reaction Lens.
+/// Adjustable parameters shared by the authoritative volume and native parity reference.
 ///
 /// Rates and diffusion coefficients are expressed in the model's current
 /// nondimensional time and length units. Optical controls retain the UI units

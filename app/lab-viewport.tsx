@@ -9,8 +9,24 @@ import {
   voxelActivity,
 } from "./volume-visualization";
 import { createVoxelMesh, voxelPathOpacity } from "./voxel-rendering";
+import {
+  BEAM_ROTATION_X,
+  beamConeDimensions,
+} from "./optics-visualization";
 
 export type FieldMode = "conversion" | "oxygen" | "radicals" | "development";
+
+export type PsfPreview = {
+  model: string;
+  qualityTier: string;
+  pupilSamples: number;
+  kernelVoxels: number;
+  na: number;
+  wavelengthNm: number;
+  coneHalfAngleRad: number;
+  fwhmRadiiUm: [number, number, number];
+  tenthMaxRadiiUm: [number, number, number];
+};
 
 type LabViewportProps = {
   pathPositions: Float32Array | null;
@@ -22,7 +38,9 @@ type LabViewportProps = {
   focus: [number, number, number];
   progress: number;
   selectedLayerZ: number;
+  sectionEnabled: boolean;
   voxelPitch: [number, number, number];
+  opticsPreview: PsfPreview | null;
   fieldMode: FieldMode;
   stage: string;
 };
@@ -39,12 +57,13 @@ type SceneHandles = {
   beam: THREE.Mesh;
   membrane: THREE.Mesh;
   lensBox: THREE.LineSegments;
+  sectionPlane: THREE.Plane;
   resizeObserver: ResizeObserver;
   animationFrame: number;
 };
 
 const RENDERER_UNAVAILABLE_MESSAGE =
-  "This browser could not start WebGL 2. The simulation controls and 2D Reaction Lens remain available.";
+  "This browser could not start WebGL 2. The simulation controls and authoritative chemistry section remain available.";
 
 const VIOLET = new THREE.Color("#8b5cff");
 const CYAN = new THREE.Color("#46d8ff");
@@ -55,7 +74,11 @@ const SLATE = new THREE.Color("#69728e");
 const DARK = new THREE.Color("#111724");
 const MAX_RENDER_VOXELS = 60_000;
 
-async function loadBenchyTarget(scene: THREE.Scene, signal: AbortSignal) {
+async function loadBenchyTarget(
+  scene: THREE.Scene,
+  signal: AbortSignal,
+  sectionPlane: THREE.Plane,
+) {
   const response = await fetch("/benchy/3dbenchy-mesh.bin", { signal });
   if (!response.ok) throw new Error(`3DBenchy mesh returned ${response.status}`);
   const positions = new Float32Array(await response.arrayBuffer());
@@ -72,6 +95,7 @@ async function loadBenchyTarget(scene: THREE.Scene, signal: AbortSignal) {
       metalness: 0,
       side: THREE.DoubleSide,
       depthWrite: false,
+      clippingPlanes: [sectionPlane],
     }),
   );
   surface.name = "official-3dbenchy-target";
@@ -89,6 +113,9 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.15;
+  renderer.localClippingEnabled = true;
+
+  const sectionPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 1e6);
 
   const scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2("#05070d", 0.019);
@@ -171,11 +198,13 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
       transparent: true,
       opacity: 0.22,
       depthWrite: false,
+      clippingPlanes: [sectionPlane],
     }),
   );
   scene.add(path);
 
   const materialPoints = createVoxelMesh(THREE, MAX_RENDER_VOXELS);
+  (materialPoints.material as THREE.Material).clippingPlanes = [sectionPlane];
   materialPoints.visible = false;
   scene.add(materialPoints);
 
@@ -203,11 +232,12 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
       depthWrite: false,
     }),
   );
-  focusHalo.scale.set(1.05, 1.05, 2.4);
-  focus.add(focusHalo);
+  focusHalo.scale.set(0.36, 0.36, 2.4);
+  focusHalo.position.copy(focus.position);
+  scene.add(focusHalo);
 
   const beam = new THREE.Mesh(
-    new THREE.ConeGeometry(2.2, 17, 32, 1, true),
+    new THREE.ConeGeometry(1, 1, 32, 1, true),
     new THREE.MeshBasicMaterial({
       color: VIOLET,
       transparent: true,
@@ -217,7 +247,10 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
       blending: THREE.AdditiveBlending,
     }),
   );
-  beam.rotation.x = Math.PI / 2;
+  // ConeGeometry's tip starts on +Y. Rotate it toward -Z so the tip lands at
+  // the focus and the aperture opens above the specimen.
+  beam.rotation.x = BEAM_ROTATION_X;
+  beam.scale.set(2.2, 17, 2.2);
   beam.position.set(0, 0, 15.5);
   scene.add(beam);
 
@@ -258,11 +291,18 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
 
   let animationFrame = 0;
   const started = performance.now();
+  const pulsedHaloScale = new THREE.Vector3();
   const animate = () => {
     const elapsed = (performance.now() - started) / 1000;
     controls.update();
     const pulse = 1 + Math.sin(elapsed * 4.5) * 0.08;
-    focusHalo.scale.set(1.05 * pulse, 1.05 * pulse, 2.4 * pulse);
+    const focusTarget = focus.userData.targetScale as THREE.Vector3 | undefined;
+    if (focusTarget) focus.scale.lerp(focusTarget, 0.18);
+    const haloTarget = focusHalo.userData.targetScale as THREE.Vector3 | undefined;
+    if (haloTarget) {
+      pulsedHaloScale.copy(haloTarget).multiplyScalar(pulse);
+      focusHalo.scale.lerp(pulsedHaloScale, 0.14);
+    }
     const focusMaterial = focus.material as THREE.MeshBasicMaterial;
     focusMaterial.opacity = 0.72 + Math.sin(elapsed * 7) * 0.1;
     renderer.render(scene, camera);
@@ -282,6 +322,7 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
     beam,
     membrane,
     lensBox,
+    sectionPlane,
     resizeObserver,
     animationFrame,
   };
@@ -320,7 +361,9 @@ export default function LabViewport({
   focus,
   progress,
   selectedLayerZ,
+  sectionEnabled,
   voxelPitch,
+  opticsPreview,
   fieldMode,
   stage,
 }: LabViewportProps) {
@@ -356,7 +399,11 @@ export default function LabViewport({
     );
     if (handles) {
       handlesRef.current = handles;
-      void loadBenchyTarget(handles.scene, meshAbortController.signal).catch(
+      void loadBenchyTarget(
+        handles.scene,
+        meshAbortController.signal,
+        handles.sectionPlane,
+      ).catch(
         () => undefined,
       );
     }
@@ -496,15 +543,35 @@ export default function LabViewport({
     const handles = handlesRef.current;
     if (!handles) return;
     handles.focus.position.set(...focus);
+    handles.focusHalo.position.set(...focus);
     handles.lensBox.position.set(...focus);
-    handles.beam.position.set(focus[0], focus[1], focus[2] + 8.5);
-  }, [focus]);
+    if (!opticsPreview) {
+      handles.beam.position.set(focus[0], focus[1], focus[2] + 8.5);
+      return;
+    }
+
+    const beam = beamConeDimensions(opticsPreview.coneHalfAngleRad);
+    handles.beam.scale.set(beam.radius, beam.length, beam.radius);
+    handles.beam.position.set(
+      focus[0],
+      focus[1],
+      focus[2] + beam.centerOffsetZ,
+    );
+    handles.focus.userData.targetScale = new THREE.Vector3(
+      ...opticsPreview.fwhmRadiiUm,
+    );
+    handles.focusHalo.userData.targetScale = new THREE.Vector3(
+      ...opticsPreview.tenthMaxRadiiUm,
+    );
+  }, [focus, opticsPreview]);
 
   useEffect(() => {
     const handles = handlesRef.current;
     if (!handles) return;
     handles.membrane.position.z = selectedLayerZ;
-  }, [selectedLayerZ]);
+    handles.membrane.visible = sectionEnabled;
+    handles.sectionPlane.constant = sectionEnabled ? selectedLayerZ : 1e6;
+  }, [sectionEnabled, selectedLayerZ]);
 
   return (
     <div

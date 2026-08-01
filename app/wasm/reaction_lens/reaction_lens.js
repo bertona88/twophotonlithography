@@ -1,191 +1,6 @@
 /* @ts-self-types="./reaction_lens.d.ts" */
 
 /**
- * JavaScript-facing owner of the authoritative numerical state.
- */
-export class ReactionLensSimulation {
-    static __wrap(ptr) {
-        const obj = Object.create(ReactionLensSimulation.prototype);
-        obj.__wbg_ptr = ptr;
-        ReactionLensSimulationFinalization.register(obj, obj.__wbg_ptr, obj);
-        return obj;
-    }
-    __destroy_into_raw() {
-        const ptr = this.__wbg_ptr;
-        this.__wbg_ptr = 0;
-        ReactionLensSimulationFinalization.unregister(this);
-        return ptr;
-    }
-    free() {
-        const ptr = this.__destroy_into_raw();
-        wasm.__wbg_reactionlenssimulation_free(ptr, 0);
-    }
-    /**
-     * Continue diffusion and chemistry with no optical source.
-     * @param {number} step_count
-     * @param {number} progress
-     * @returns {number}
-     */
-    advance_dark_steps(step_count, progress) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.reactionlenssimulation_advance_dark_steps(retptr, this.__wbg_ptr, step_count, progress);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return r0 >>> 0;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Advance logical development steps, returning the count actually run.
-     * @param {number} step_count
-     * @returns {number}
-     */
-    advance_development_steps(step_count) {
-        const ret = wasm.reactionlenssimulation_advance_development_steps(this.__wbg_ptr, step_count);
-        return ret >>> 0;
-    }
-    /**
-     * Advance illuminated fixed steps at a stationary trajectory progress.
-     * @param {number} step_count
-     * @param {number} progress
-     * @returns {number}
-     */
-    advance_exposure_at_progress_steps(step_count, progress) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.reactionlenssimulation_advance_exposure_at_progress_steps(retptr, this.__wbg_ptr, step_count, progress);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return r0 >>> 0;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Advance exact fixed exposure steps, returning the count actually run.
-     * @param {number} step_count
-     * @returns {number}
-     */
-    advance_exposure_steps(step_count) {
-        const ret = wasm.reactionlenssimulation_advance_exposure_steps(this.__wbg_ptr, step_count);
-        return ret >>> 0;
-    }
-    /**
-     * Return a small object with solver identity, schedule, time, checksum, and memory.
-     * @returns {any}
-     */
-    get_diagnostics() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.reactionlenssimulation_get_diagnostics(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Refresh the packed snapshot and return its stable byte offset in Wasm memory.
-     *
-     * The worker must reacquire `wasm.memory.buffer`, create a `Float32Array`
-     * view of `snapshot_len()` elements, and copy that view before transferring
-     * an `ArrayBuffer` to the main thread.
-     * @returns {number}
-     */
-    get_snapshot() {
-        const ret = wasm.reactionlenssimulation_get_snapshot(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * Construct from `{ exposureStepsTotal, parameters }` and an explicit seed.
-     * @param {any} config
-     * @param {number} seed
-     */
-    constructor(config, seed) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.reactionlenssimulation_new(retptr, addHeapObject(config), seed);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            this.__wbg_ptr = r0;
-            ReactionLensSimulationFinalization.register(this, this.__wbg_ptr, this);
-            return this;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Reset all fields and logical progress with a deterministic seed.
-     * @param {number} seed
-     */
-    reset(seed) {
-        wasm.reactionlenssimulation_reset(this.__wbg_ptr, seed);
-    }
-    /**
-     * Apply the current worker-derived exposure schedule.
-     * @param {number} exposure_steps_total
-     */
-    set_exposure_steps_total(exposure_steps_total) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.reactionlenssimulation_set_exposure_steps_total(retptr, this.__wbg_ptr, exposure_steps_total);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Apply validated parameters without implicitly resetting the state.
-     * @param {any} parameters
-     */
-    set_parameters(parameters) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.reactionlenssimulation_set_parameters(retptr, this.__wbg_ptr, addHeapObject(parameters));
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Packed snapshot length in f32 elements (not bytes).
-     * @returns {number}
-     */
-    snapshot_len() {
-        const ret = wasm.reactionlenssimulation_snapshot_len(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-}
-if (Symbol.dispose) ReactionLensSimulation.prototype[Symbol.dispose] = ReactionLensSimulation.prototype.free;
-
-/**
  * JavaScript-facing owner of the adaptive dense 3D resin volume.
  */
 export class WholeVolumeSimulation {
@@ -287,6 +102,16 @@ export class WholeVolumeSimulation {
         return ret >>> 0;
     }
     /**
+     * Packed oxygen, radicals, conversion, remaining mass, and occupancy for
+     * the authoritative XY grid plane nearest the requested physical Z.
+     * @param {number} z_um
+     * @returns {number}
+     */
+    get_xy_slice(z_um) {
+        const ret = wasm.wholevolumesimulation_get_xy_slice(this.__wbg_ptr, z_um);
+        return ret >>> 0;
+    }
+    /**
      * @returns {number}
      */
     layer_positions_len() {
@@ -349,26 +174,56 @@ export class WholeVolumeSimulation {
         const ret = wasm.wholevolumesimulation_snapshot_len(this.__wbg_ptr);
         return ret >>> 0;
     }
+    /**
+     * @returns {number}
+     */
+    xy_slice_height() {
+        const ret = wasm.wholevolumesimulation_xy_slice_height(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    xy_slice_len() {
+        const ret = wasm.wholevolumesimulation_xy_slice_len(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    xy_slice_width() {
+        const ret = wasm.wholevolumesimulation_xy_slice_width(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    xy_slice_z_um() {
+        const ret = wasm.wholevolumesimulation_xy_slice_z_um(this.__wbg_ptr);
+        return ret;
+    }
 }
 if (Symbol.dispose) WholeVolumeSimulation.prototype[Symbol.dispose] = WholeVolumeSimulation.prototype.free;
 
 /**
- * Factory equivalent to `new ReactionLensSimulation(config, seed)`.
- * @param {any} config
- * @param {number} seed
- * @returns {ReactionLensSimulation}
+ * Compute a renderable PSF envelope from the same adaptive Debye kernel used
+ * by the 3D simulation, without constructing or mutating simulation state.
+ * @param {number} na
+ * @param {number} wavelength_nm
+ * @param {number} memory_budget_bytes
+ * @returns {any}
  */
-export function create_simulation(config, seed) {
+export function preview_volume_psf(na, wavelength_nm, memory_budget_bytes) {
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        wasm.create_simulation(retptr, addHeapObject(config), seed);
+        wasm.preview_volume_psf(retptr, na, wavelength_nm, memory_budget_bytes);
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
         if (r2) {
             throw takeObject(r1);
         }
-        return ReactionLensSimulation.__wrap(r0);
+        return takeObject(r0);
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
     }
@@ -533,9 +388,6 @@ function __wbg_get_imports() {
     };
 }
 
-const ReactionLensSimulationFinalization = (typeof FinalizationRegistry === 'undefined')
-    ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_reactionlenssimulation_free(ptr, 1));
 const WholeVolumeSimulationFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_wholevolumesimulation_free(ptr, 1));

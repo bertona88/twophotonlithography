@@ -10,8 +10,8 @@ path to deterministic reaction–diffusion polymerization and development.
 - Parameter-driven Micro-Benchy slicing with layer, hatch, contour, scan-speed,
   power, and motion controls
 - A timestamped Three.js exposure view with layer inspection
-- A Rust/WebAssembly Reaction Lens solver running inside a TypeScript Web
-  Worker, never on the browser main thread
+- One authoritative adaptive 3D Rust/WebAssembly resin simulation running
+  inside a TypeScript Web Worker, never on the browser main thread
 - Fixed-step fields for photoinitiator, oxygen, radical activity, conversion,
   developer, and remaining mass
 - Development based on computed transport, conversion-dependent resistance,
@@ -20,9 +20,11 @@ path to deterministic reaction–diffusion polymerization and development.
 - Runtime diagnostics that identify the solver, grid, timestep, simulated model
   time, update rate, checksum, and Wasm memory use
 
-The rendered Reaction Lens is derived from the numerical fields. React and
-Three.js cannot mutate the authoritative chemistry state, and there is no
-decorative fallback if WebAssembly initialization fails.
+The 3D viewport and the Reaction Lens are two views of the same numerical
+volume. The lens is an XY section at the layer selected by the shared section
+slider; it is not a second simulation. React and Three.js cannot mutate the
+authoritative chemistry state, and there is no decorative fallback if
+WebAssembly initialization fails.
 
 ## Architecture
 
@@ -30,7 +32,7 @@ decorative fallback if WebAssembly initialization fails.
 flowchart TD
     UI["React controls"] <--> W["TypeScript Web Worker"]
     V["Three.js visualization"] <--> W
-    W <--> R["Rust/Wasm Reaction Lens"]
+    W <--> R["Rust/Wasm 3D resin volume"]
 ```
 
 - React owns controls, interaction, run state, and the diagnostics display.
@@ -38,35 +40,22 @@ flowchart TD
 - The Web Worker initializes Wasm, validates the snapshot contract, schedules
   simulation batches, handles messages, quantizes render inputs, and transfers
   JavaScript-owned buffers to the main thread.
-- Rust owns the Reaction Lens parameters, reset, exposure trajectory, numerical
-  state, fixed-timestep integration, development, deterministic checksum, and
-  diagnostics.
+- Rust owns the volume parameters, authoritative scan trajectory, numerical
+  state, adaptive reaction/diffusion integration, development, deterministic
+  checksum, and diagnostics.
 
-The lens domain remains `112 × 68` cells over `15 × 9 µm`. Exposure chemistry
-advances at a fixed `0.016 T₀` model timestep. `T₀` is nondimensional in the
-current model; it must not be interpreted as seconds or microseconds. The base
-dissolution rate is expressed in `T₀⁻¹`, and development duration is expressed
-in `T₀`. Physical seconds are used separately for scan-path duration derived
-from the selected speed in `µm/s`; they are not the chemistry integration unit.
-
-Rust stores six explicit `f32` field arrays in this order:
-
-1. photoinitiator
-2. oxygen
-3. radical activity
-4. conversion
-5. developer
-6. remaining mass
-
-Snapshots are packed field-major into a separate, reusable Wasm buffer rather
-than serialized as JSON. The worker copies the snapshot into compact rendering
-buffers before transfer, so rendering never receives a mutable view of Wasm
-simulation memory.
-
-The whole-Benchy view now uses the official CreativeTools geometry and a dense,
+The whole-Benchy view uses the official CreativeTools geometry and a dense,
 adaptive three-dimensional resin volume owned by Rust/Wasm. The worker loads a
 deterministic occupancy asset, selects a memory tier, schedules the scan, and
 copies compact render snapshots; TypeScript does not evolve chemistry.
+
+The main render snapshot packs position, conversion, oxygen, radicals, and
+remaining mass for a bounded set of target and surrounding-resin voxels. A
+separate reusable slice buffer packs normalized oxygen, raw radical activity,
+conversion, remaining mass, and target occupancy for one complete XY grid
+plane. Both buffers are copied before transfer, so rendering never receives a
+mutable view of Wasm simulation memory.
+
 
 ## Local setup
 
@@ -142,15 +131,17 @@ npm run test:production-worker
   validation, diffusion-only and reaction-only behavior, oxygen recovery,
   radical decay, conversion monotonicity, development stability, and snapshot
   dimensions and ordering.
-- The focused Wasm test builds the Node-targeted package and verifies
-  deterministic replay inside a worker thread.
+- The focused Wasm test builds the Node-targeted package and verifies the
+  authoritative 3D volume, deterministic replay, and XY slice dimensions
+  inside a worker thread.
 - The production-worker test loads the browser-targeted bundle emitted by the
   production build, initializes its emitted Wasm asset off the main thread,
   exercises the initialization queue, validates transferred snapshot buffers,
   and checks the status and error message protocol.
-- `npm run parity` exercises the Rust solver against representative checkpoints
-  captured by the temporary pre-migration TypeScript harness. The duplicated
-  TypeScript Reaction Lens numerical solver is not retained in production.
+- `npm run parity` exercises the preserved native reference model against
+  representative checkpoints captured by the temporary pre-migration
+  TypeScript harness. Neither reference implementation is exported to the
+  browser or retained in the production Wasm API.
 
 The parity reference covers no exposure, stationary exposure, a moving scan,
 oxygen depletion and recovery, radical decay, conversion accumulation,
@@ -176,12 +167,17 @@ single-threaded development-mode JavaScript loop.
 
 The Reaction Lens panel shows:
 
-- `Solver: Rust/Wasm`
-- grid dimensions
-- the fixed model timestep
-- simulation updates per second
-- current simulated model time
-- Wasm memory use when available
+- the authoritative XY plane and physical Z position selected by the layer
+  slider
+- local target-cell oxygen, radical, conversion, and gel statistics
+- adaptive 3D grid dimensions and quality tier
+- volume updates per second, volume-owned memory, total Wasm memory, and replay
+  checksum
+
+The oxygen, radical, conversion, and remaining-mass selector is global: it
+changes both the 3D viewport and Reaction Lens. The section-cut toggle applies
+the selected Z plane to the Three.js specimen, while the slider requests the
+matching complete XY chemistry plane directly from Rust/Wasm.
 
 Controls remain unavailable while Wasm initializes. A load or initialization
 failure produces a persistent, visible error and rejects queued commands; the
@@ -192,9 +188,6 @@ application does not silently substitute fake chemistry.
 This is an educational continuum model, not a calibrated prediction for
 a commercial photoresist.
 
-- The Reaction Lens is a two-dimensional `x–z` domain following a synthetic,
-  predetermined focus trajectory; it is not yet coupled to a genuinely movable
-  lens over arbitrary geometry.
 - The bundled 3DBenchy is voxelized offline; arbitrary uploaded STL execution is
   not implemented yet.
 - The seed is explicit replay metadata, but the preserved model currently has
@@ -214,12 +207,12 @@ experimental calibration against a named resin/process dataset**.
 - `app/page.tsx` — laboratory UI, slicer state, timeline, controls, and
   diagnostics
 - `app/lab-viewport.tsx` — client-only Three.js viewport
-- `app/simulation.worker.ts` — Wasm initialization, message handling, adaptive
-  memory input, scheduling, and immutable snapshot transfer
+- `app/simulation.worker.ts` — Wasm initialization, authoritative volume
+  scheduling, selected-plane extraction, and immutable snapshot transfer
 - `rust/reaction-lens/src/whole_volume.rs` — dense 3D resin, vectorial PSF,
   scan timing, exposure chemistry, threshold conversion, and development
-- `rust/reaction-lens/` — authoritative Reaction Lens numerical core and Rust
-  tests
+- `rust/reaction-lens/` — authoritative 3D volume core, native parity reference,
+  and Rust tests
 - `scripts/build-wasm.sh` — pinned browser and Node Wasm builds
 - `worker/index.ts` — deployable Cloudflare Worker entry
 - `tests/` — worker initialization, build-artifact, and rendered-output checks

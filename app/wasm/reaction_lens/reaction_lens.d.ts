@@ -2,62 +2,6 @@
 /* eslint-disable */
 
 /**
- * JavaScript-facing owner of the authoritative numerical state.
- */
-export class ReactionLensSimulation {
-    free(): void;
-    [Symbol.dispose](): void;
-    /**
-     * Continue diffusion and chemistry with no optical source.
-     */
-    advance_dark_steps(step_count: number, progress: number): number;
-    /**
-     * Advance logical development steps, returning the count actually run.
-     */
-    advance_development_steps(step_count: number): number;
-    /**
-     * Advance illuminated fixed steps at a stationary trajectory progress.
-     */
-    advance_exposure_at_progress_steps(step_count: number, progress: number): number;
-    /**
-     * Advance exact fixed exposure steps, returning the count actually run.
-     */
-    advance_exposure_steps(step_count: number): number;
-    /**
-     * Return a small object with solver identity, schedule, time, checksum, and memory.
-     */
-    get_diagnostics(): any;
-    /**
-     * Refresh the packed snapshot and return its stable byte offset in Wasm memory.
-     *
-     * The worker must reacquire `wasm.memory.buffer`, create a `Float32Array`
-     * view of `snapshot_len()` elements, and copy that view before transferring
-     * an `ArrayBuffer` to the main thread.
-     */
-    get_snapshot(): number;
-    /**
-     * Construct from `{ exposureStepsTotal, parameters }` and an explicit seed.
-     */
-    constructor(config: any, seed: number);
-    /**
-     * Reset all fields and logical progress with a deterministic seed.
-     */
-    reset(seed: number): void;
-    /**
-     * Apply the current worker-derived exposure schedule.
-     */
-    set_exposure_steps_total(exposure_steps_total: number): void;
-    /**
-     * Apply validated parameters without implicitly resetting the state.
-     */
-    set_parameters(parameters: any): void;
-    /**
-     * Packed snapshot length in f32 elements (not bytes).
-     */
-    snapshot_len(): number;
-}
-
-/**
  * JavaScript-facing owner of the adaptive dense 3D resin volume.
  */
 export class WholeVolumeSimulation {
@@ -78,35 +22,34 @@ export class WholeVolumeSimulation {
      */
     get_scan_path(): number;
     get_snapshot(): number;
+    /**
+     * Packed oxygen, radicals, conversion, remaining mass, and occupancy for
+     * the authoritative XY grid plane nearest the requested physical Z.
+     */
+    get_xy_slice(z_um: number): number;
     layer_positions_len(): number;
     constructor(config: any, occupancy: Uint8Array);
     reset(): void;
     scan_path_len(): number;
     set_parameters(parameters: any): void;
     snapshot_len(): number;
+    xy_slice_height(): number;
+    xy_slice_len(): number;
+    xy_slice_width(): number;
+    xy_slice_z_um(): number;
 }
 
 /**
- * Factory equivalent to `new ReactionLensSimulation(config, seed)`.
+ * Compute a renderable PSF envelope from the same adaptive Debye kernel used
+ * by the 3D simulation, without constructing or mutating simulation state.
  */
-export function create_simulation(config: any, seed: number): ReactionLensSimulation;
+export function preview_volume_psf(na: number, wavelength_nm: number, memory_budget_bytes: number): any;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly __wbg_reactionlenssimulation_free: (a: number, b: number) => void;
-    readonly reactionlenssimulation_set_parameters: (a: number, b: number, c: number) => void;
-    readonly reactionlenssimulation_set_exposure_steps_total: (a: number, b: number, c: number) => void;
-    readonly reactionlenssimulation_reset: (a: number, b: number) => void;
-    readonly reactionlenssimulation_advance_exposure_steps: (a: number, b: number) => number;
-    readonly reactionlenssimulation_advance_exposure_at_progress_steps: (a: number, b: number, c: number, d: number) => void;
-    readonly reactionlenssimulation_advance_dark_steps: (a: number, b: number, c: number, d: number) => void;
-    readonly reactionlenssimulation_advance_development_steps: (a: number, b: number) => number;
-    readonly reactionlenssimulation_get_snapshot: (a: number) => number;
-    readonly reactionlenssimulation_snapshot_len: (a: number) => number;
-    readonly reactionlenssimulation_get_diagnostics: (a: number, b: number) => void;
-    readonly create_simulation: (a: number, b: number, c: number) => void;
+    readonly preview_volume_psf: (a: number, b: number, c: number, d: number) => void;
     readonly __wbg_wholevolumesimulation_free: (a: number, b: number) => void;
     readonly wholevolumesimulation_new: (a: number, b: number, c: number, d: number) => void;
     readonly wholevolumesimulation_set_parameters: (a: number, b: number, c: number) => void;
@@ -115,6 +58,11 @@ export interface InitOutput {
     readonly wholevolumesimulation_advance_development_steps: (a: number, b: number) => number;
     readonly wholevolumesimulation_get_snapshot: (a: number) => number;
     readonly wholevolumesimulation_snapshot_len: (a: number) => number;
+    readonly wholevolumesimulation_get_xy_slice: (a: number, b: number) => number;
+    readonly wholevolumesimulation_xy_slice_len: (a: number) => number;
+    readonly wholevolumesimulation_xy_slice_width: (a: number) => number;
+    readonly wholevolumesimulation_xy_slice_height: (a: number) => number;
+    readonly wholevolumesimulation_xy_slice_z_um: (a: number) => number;
     readonly wholevolumesimulation_get_scan_path: (a: number) => number;
     readonly wholevolumesimulation_scan_path_len: (a: number) => number;
     readonly wholevolumesimulation_get_layer_positions: (a: number) => number;
@@ -123,7 +71,6 @@ export interface InitOutput {
     readonly wholevolumesimulation_exposure_progress: (a: number) => number;
     readonly wholevolumesimulation_development_progress: (a: number) => number;
     readonly wholevolumesimulation_get_diagnostics: (a: number, b: number) => void;
-    readonly reactionlenssimulation_new: (a: number, b: number, c: number) => void;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_add_to_stack_pointer: (a: number) => number;

@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import dynamic from "next/dynamic";
-import type { FieldMode } from "./lab-viewport";
+import type { FieldMode, PsfPreview } from "./lab-viewport";
 import { shouldIgnoreLabShortcut } from "./keyboard-shortcuts";
 import { multipassPathProgress } from "./volume-visualization";
 
@@ -80,24 +80,12 @@ type Metrics = ChemistryMetrics & {
   offTargetSurvivingFraction: number;
 };
 
-type LensMetrics = ChemistryMetrics & {
-  cellSizeNm: number;
-  timestepModel: number;
+type SliceMetrics = ChemistryMetrics & {
+  targetCells: number;
+  voxelPitchNm: [number, number];
 };
 
 type SolverState = "initializing" | "ready" | "error";
-
-type SolverDiagnostics = {
-  solver: "Rust/Wasm";
-  gridWidth: number;
-  gridHeight: number;
-  timestepModel: number;
-  updatesPerSecond: number;
-  simulatedModelTime: number;
-  ownedMemoryBytes: number;
-  wasmMemoryBytes: number;
-  checksum: string;
-};
 
 type VolumeDiagnostics = {
   solver: string;
@@ -112,6 +100,7 @@ type VolumeDiagnostics = {
   psfModel: string;
   psfPupilSamples: number;
   psfKernelVoxels: number;
+  psfPreview: PsfPreview;
   scanPoints: number;
   layerCount: number;
   pathLengthUm: number;
@@ -139,15 +128,15 @@ type SliceInfo = {
 
 type RunResult = {
   metrics: Metrics;
-  lensMetrics: LensMetrics;
+  sliceMetrics: SliceMetrics;
   conversion: Uint8Array;
   oxygen: Uint8Array;
   radicals: Uint8Array;
   remaining: Uint8Array;
-  lensPixels: Uint8Array;
-  lensWidth: number;
-  lensHeight: number;
-  diagnostics: SolverDiagnostics;
+  slicePixels: Uint8Array;
+  sliceWidth: number;
+  sliceHeight: number;
+  sliceZUm: number;
   volumeDiagnostics: VolumeDiagnostics;
   diffusion: number;
 };
@@ -490,26 +479,14 @@ const EMPTY_METRICS: Metrics = {
   offTargetSurvivingFraction: 0,
 };
 
-const EMPTY_LENS_METRICS: LensMetrics = {
+const EMPTY_SLICE_METRICS: SliceMetrics = {
   oxygenMean: 1,
   conversionMean: 0,
   radicalMax: 0,
   gelledFraction: 0,
   survivingFraction: 1,
-  cellSizeNm: 135,
-  timestepModel: 0.016,
-};
-
-const EMPTY_SOLVER_DIAGNOSTICS: SolverDiagnostics = {
-  solver: "Rust/Wasm",
-  gridWidth: 112,
-  gridHeight: 68,
-  timestepModel: 0.016,
-  updatesPerSecond: 0,
-  simulatedModelTime: 0,
-  ownedMemoryBytes: 0,
-  wasmMemoryBytes: 0,
-  checksum: "00000000",
+  targetCells: 0,
+  voxelPitchNm: [179, 170],
 };
 
 const FIELD_LABELS: Record<FieldMode, { label: string; color: string }> = {
@@ -597,28 +574,59 @@ function ParamRow({
   );
 }
 
+function FieldSelector({
+  fieldMode,
+  onFieldMode,
+}: {
+  fieldMode: FieldMode;
+  onFieldMode: (mode: FieldMode) => void;
+}) {
+  return (
+    <div className="field-selector" aria-label="Displayed chemistry field">
+      <span className="field-selector-label">Field</span>
+      {(Object.keys(FIELD_LABELS) as FieldMode[]).map((mode) => (
+        <button
+          key={mode}
+          className={fieldMode === mode ? "active" : ""}
+          onClick={() => onFieldMode(mode)}
+          style={{ "--field-color": FIELD_LABELS[mode].color } as React.CSSProperties}
+          type="button"
+          aria-pressed={fieldMode === mode}
+        >
+          <i />
+          {FIELD_LABELS[mode].label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ReactionLens({
   pixels,
   width,
   height,
+  sliceZUm,
   fieldMode,
-  onFieldMode,
   mobileOpen,
   onMobileClose,
   metrics,
   solverState,
-  diagnostics,
+  volumeDiagnostics,
+  wasmMemoryBytes,
+  updatesPerSecond,
 }: {
   pixels: Uint8Array | null;
   width: number;
   height: number;
+  sliceZUm: number;
   fieldMode: FieldMode;
-  onFieldMode: (mode: FieldMode) => void;
   mobileOpen: boolean;
   onMobileClose: () => void;
-  metrics: LensMetrics;
+  metrics: SliceMetrics;
   solverState: SolverState;
-  diagnostics: SolverDiagnostics;
+  volumeDiagnostics: VolumeDiagnostics | null;
+  wasmMemoryBytes: number;
+  updatesPerSecond: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -633,13 +641,15 @@ function ReactionLens({
     const image = context.createImageData(width, height);
 
     for (let index = 0; index < width * height; index += 1) {
-      const oxygenValue = pixels[index * 4] / 255;
-      const radicalValue = pixels[index * 4 + 1] / 255;
-      const conversionValue = pixels[index * 4 + 2] / 255;
-      const remainingValue = pixels[index * 4 + 3] / 255;
-      let red = 6;
-      let green = 8;
-      let blue = 16;
+      const source = index * 5;
+      const oxygenValue = pixels[source] / 255;
+      const radicalValue = pixels[source + 1] / 255;
+      const conversionValue = pixels[source + 2] / 255;
+      const remainingValue = pixels[source + 3] / 255;
+      const occupied = pixels[source + 4] > 0;
+      let red = occupied ? 12 : 6;
+      let green = occupied ? 15 : 8;
+      let blue = occupied ? 26 : 16;
       let intensity = 0;
 
       if (fieldMode === "oxygen") {
@@ -677,17 +687,19 @@ function ReactionLens({
     <section
       className={`reaction-lens glass-panel ${mobileOpen ? "mobile-open" : ""}`}
       id="reaction-lens-panel"
-      aria-label="2D Reaction Lens diagnostic"
+      aria-label="Authoritative 3D volume section"
       data-mobile-open={mobileOpen ? "true" : "false"}
     >
       <div className="lens-heading">
         <div>
-          <span className="eyebrow">Reaction Lens · 2D diagnostic</span>
-          <strong>15 × 9 µm · XZ field</strong>
+          <span className="eyebrow">Reaction Lens · 3D volume section</span>
+          <strong>Authoritative XY · z {formatNumber(sliceZUm, 2)} µm</strong>
         </div>
         <span className="live-indicator">
           <i />
-          {solverState === "ready" ? `${metrics.cellSizeNm} nm cells` : solverState}
+          {solverState === "ready"
+            ? `${metrics.voxelPitchNm[0]} × ${metrics.voxelPitchNm[1]} nm`
+            : solverState}
         </span>
         <button
           className="mobile-lens-close"
@@ -702,21 +714,7 @@ function ReactionLens({
         <canvas ref={canvasRef} className="lens-canvas" />
         <div className="lens-reticle" aria-hidden="true" />
         <span className="axis axis-x">X</span>
-        <span className="axis axis-z">Z</span>
-      </div>
-      <div className="field-selector">
-        {(Object.keys(FIELD_LABELS) as FieldMode[]).map((mode) => (
-          <button
-            key={mode}
-            className={fieldMode === mode ? "active" : ""}
-            onClick={() => onFieldMode(mode)}
-            style={{ "--field-color": FIELD_LABELS[mode].color } as React.CSSProperties}
-            type="button"
-          >
-            <i />
-            {FIELD_LABELS[mode].label}
-          </button>
-        ))}
+        <span className="axis axis-z">Y</span>
       </div>
       <div className="lens-readouts">
         <span>
@@ -734,23 +732,25 @@ function ReactionLens({
       </div>
       <div
         className="lens-diagnostics"
-        aria-label="2D Reaction Lens solver diagnostics"
+        aria-label="Authoritative volume slice diagnostics"
       >
         <span>
-          <strong>{diagnostics.solver}</strong>
-          {`${diagnostics.gridWidth}×${diagnostics.gridHeight}`}
+          <strong>{volumeDiagnostics?.solver ?? "Rust/Wasm 3D volume"}</strong>
+          {volumeDiagnostics
+            ? `${volumeDiagnostics.gridWidth}×${volumeDiagnostics.gridHeight}×${volumeDiagnostics.gridDepth}`
+            : `${width}×${height} plane`}
         </span>
         <span>
-          <strong>2D lens tier</strong>
-          {`Δt ${diagnostics.timestepModel.toFixed(3)} T₀`}
+          <strong>{volumeDiagnostics?.qualityTier ?? "volume tier"}</strong>
+          {`${metrics.targetCells.toLocaleString()} target cells`}
         </span>
         <span>
-          <strong>{formatMemory(diagnostics.ownedMemoryBytes)}</strong>
-          {`2D owned · t ${diagnostics.simulatedModelTime.toFixed(2)} T₀`}
+          <strong>{formatMemory(volumeDiagnostics?.ownedMemoryBytes ?? 0)}</strong>
+          {`${updatesPerSecond.toFixed(0)} volume updates/s`}
         </span>
         <span>
-          <strong>{formatMemory(diagnostics.wasmMemoryBytes)}</strong>
-          {`total · replay ${diagnostics.checksum}`}
+          <strong>{formatMemory(wasmMemoryBytes)}</strong>
+          {`total · replay ${volumeDiagnostics?.checksum ?? "pending"}`}
         </span>
       </div>
     </section>
@@ -789,6 +789,7 @@ export default function Home() {
   const lensTriggerRef = useRef<HTMLButtonElement | null>(null);
   const parameterSheetRef = useRef<HTMLElement | null>(null);
   const parameterCloseRef = useRef<HTMLButtonElement | null>(null);
+  const opticsPreviewRequestRef = useRef(0);
   const latestArraysRef = useRef<{
     conversion: Uint8Array;
     oxygen: Uint8Array;
@@ -811,12 +812,13 @@ export default function Home() {
   const [oxygen, setOxygen] = useState<Uint8Array | null>(null);
   const [radicals, setRadicals] = useState<Uint8Array | null>(null);
   const [remaining, setRemaining] = useState<Uint8Array | null>(null);
-  const [lensPixels, setLensPixels] = useState<Uint8Array | null>(null);
-  const [lensWidth, setLensWidth] = useState(112);
-  const [lensHeight, setLensHeight] = useState(68);
+  const [slicePixels, setSlicePixels] = useState<Uint8Array | null>(null);
+  const [sliceWidth, setSliceWidth] = useState(128);
+  const [sliceHeight, setSliceHeight] = useState(72);
+  const [sliceZUm, setSliceZUm] = useState(0);
   const [metrics, setMetrics] = useState<Metrics>(EMPTY_METRICS);
-  const [lensMetrics, setLensMetrics] =
-    useState<LensMetrics>(EMPTY_LENS_METRICS);
+  const [sliceMetrics, setSliceMetrics] =
+    useState<SliceMetrics>(EMPTY_SLICE_METRICS);
   const [sliceInfo, setSliceInfo] = useState<SliceInfo | null>(null);
   const [appliedPasses, setAppliedPasses] = useState(DEFAULT_PARAMS.passes);
   const [exposureProgress, setExposureProgress] = useState(0);
@@ -824,6 +826,7 @@ export default function Home() {
   const [simulatedSeconds, setSimulatedSeconds] = useState(0);
   const [focus, setFocus] = useState<[number, number, number]>([0, 0, 7]);
   const [selectedLayer, setSelectedLayer] = useState(0);
+  const [sectionCutEnabled, setSectionCutEnabled] = useState(true);
   const [baseline, setBaseline] = useState<RunResult | null>(null);
   const [variant, setVariant] = useState<RunResult | null>(null);
   const [comparisonView, setComparisonView] = useState<"A" | "B">("B");
@@ -832,10 +835,11 @@ export default function Home() {
   const [solverState, setSolverState] =
     useState<SolverState>("initializing");
   const [solverError, setSolverError] = useState<string | null>(null);
-  const [solverDiagnostics, setSolverDiagnostics] =
-    useState<SolverDiagnostics>(EMPTY_SOLVER_DIAGNOSTICS);
   const [volumeDiagnostics, setVolumeDiagnostics] =
     useState<VolumeDiagnostics | null>(null);
+  const [wasmMemoryBytes, setWasmMemoryBytes] = useState(0);
+  const [updatesPerSecond, setUpdatesPerSecond] = useState(0);
+  const [opticsPreview, setOpticsPreview] = useState<PsfPreview | null>(null);
 
   useEffect(() => {
     const mobileQuery = window.matchMedia(MOBILE_LAYOUT_QUERY);
@@ -940,13 +944,17 @@ export default function Home() {
         setSolverState(message.status);
         if (message.status === "ready") {
           setSolverError(null);
-          if (message.diagnostics) {
-            setSolverDiagnostics(message.diagnostics);
-          }
+          setWasmMemoryBytes(message.wasmMemoryBytes ?? 0);
         }
         if (message.status === "error") {
           variantRunningRef.current = false;
           setSolverError(message.message || "The Rust/Wasm solver could not initialize.");
+        }
+        return;
+      }
+      if (message.type === "opticsPreview") {
+        if (message.requestId === opticsPreviewRequestRef.current) {
+          setOpticsPreview(message.preview);
         }
         return;
       }
@@ -983,6 +991,14 @@ export default function Home() {
         setStage("ready");
         return;
       }
+      if (message.type === "sliceInspection") {
+        setSlicePixels(new Uint8Array(message.slicePixels));
+        setSliceWidth(message.sliceWidth);
+        setSliceHeight(message.sliceHeight);
+        setSliceZUm(message.sliceZUm);
+        setSliceMetrics(message.sliceMetrics);
+        return;
+      }
       if (message.type !== "snapshot") return;
 
       const nextConversion = new Uint8Array(message.conversion);
@@ -991,11 +1007,7 @@ export default function Home() {
         ? new Uint8Array(message.radicals)
         : new Uint8Array(nextConversion.length);
       const nextRemaining = new Uint8Array(message.remaining);
-      const nextLensPixels = new Uint8Array(message.lens);
-      const nextDiagnostics =
-        message.lensDiagnostics ??
-        message.diagnostics ??
-        EMPTY_SOLVER_DIAGNOSTICS;
+      const nextSlicePixels = new Uint8Array(message.slicePixels);
       const nextVolumeMetrics = message.volumeMetrics ?? message.metrics;
       latestArraysRef.current = {
         conversion: nextConversion,
@@ -1007,31 +1019,33 @@ export default function Home() {
       setOxygen(nextOxygen);
       setRadicals(nextRadicals);
       setRemaining(nextRemaining);
-      setLensPixels(nextLensPixels);
-      setLensWidth(message.lensWidth);
-      setLensHeight(message.lensHeight);
+      setSlicePixels(nextSlicePixels);
+      setSliceWidth(message.sliceWidth);
+      setSliceHeight(message.sliceHeight);
+      setSliceZUm(message.sliceZUm);
       setMetrics(nextVolumeMetrics);
-      setLensMetrics(message.lensMetrics);
+      setSliceMetrics(message.sliceMetrics);
       setExposureProgress(message.exposureProgress);
       setDevelopmentProgress(message.developmentProgress);
       setSimulatedSeconds(message.simulatedSeconds);
       setFocus(message.focus);
-      setSolverDiagnostics(nextDiagnostics);
       setVolumeDiagnostics(message.volumeDiagnostics);
+      setWasmMemoryBytes(message.wasmMemoryBytes ?? 0);
+      setUpdatesPerSecond(message.updatesPerSecond ?? 0);
 
       if (message.stage === "complete" && variantRunningRef.current) {
         variantRunningRef.current = false;
         setVariant({
           metrics: nextVolumeMetrics,
-          lensMetrics: message.lensMetrics,
+          sliceMetrics: message.sliceMetrics,
           conversion: nextConversion.slice(),
           oxygen: nextOxygen.slice(),
           radicals: nextRadicals.slice(),
           remaining: nextRemaining.slice(),
-          lensPixels: nextLensPixels.slice(),
-          lensWidth: message.lensWidth,
-          lensHeight: message.lensHeight,
-          diagnostics: nextDiagnostics,
+          slicePixels: nextSlicePixels.slice(),
+          sliceWidth: message.sliceWidth,
+          sliceHeight: message.sliceHeight,
+          sliceZUm: message.sliceZUm,
           volumeDiagnostics: message.volumeDiagnostics,
           diffusion: variantDiffusionRef.current,
         });
@@ -1065,6 +1079,28 @@ export default function Home() {
       workerRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (solverState !== "ready") return;
+    const requestId = opticsPreviewRequestRef.current + 1;
+    opticsPreviewRequestRef.current = requestId;
+    const timer = window.setTimeout(() => {
+      workerRef.current?.postMessage({
+        type: "previewOptics",
+        requestId,
+        na: params.na,
+        wavelength: params.wavelength,
+      });
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [params.na, params.wavelength, solverState]);
+
+  useEffect(() => {
+    if (solverState !== "ready") return;
+    const zUm = layerPositions?.[selectedLayer];
+    if (!Number.isFinite(zUm)) return;
+    workerRef.current?.postMessage({ type: "inspectSlice", zUm });
+  }, [layerPositions, selectedLayer, solverState]);
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -1134,7 +1170,7 @@ export default function Home() {
 
   const branchOxygen = useCallback(() => {
     const arrays = latestArraysRef.current;
-    if (!arrays || !lensPixels || !volumeDiagnostics) return;
+    if (!arrays || !slicePixels || !volumeDiagnostics) return;
     const nextDiffusion = Math.min(0.012, params.oxygenDiffusion * 2);
     if (nextDiffusion <= params.oxygenDiffusion) {
       setNotice(
@@ -1144,15 +1180,15 @@ export default function Home() {
     }
     setBaseline({
       metrics,
-      lensMetrics,
+      sliceMetrics,
       conversion: arrays.conversion.slice(),
       oxygen: arrays.oxygen.slice(),
       radicals: arrays.radicals.slice(),
       remaining: arrays.remaining.slice(),
-      lensPixels: lensPixels.slice(),
-      lensWidth,
-      lensHeight,
-      diagnostics: solverDiagnostics,
+      slicePixels: slicePixels.slice(),
+      sliceWidth,
+      sliceHeight,
+      sliceZUm,
       volumeDiagnostics,
       diffusion: params.oxygenDiffusion,
     });
@@ -1172,13 +1208,13 @@ export default function Home() {
       `Branch B is replaying the identical path with Dₒ ${params.oxygenDiffusion.toFixed(4)} → ${nextDiffusion.toFixed(4)}.`,
     );
   }, [
-    lensHeight,
-    lensMetrics,
-    lensPixels,
-    lensWidth,
+    sliceHeight,
+    sliceMetrics,
+    slicePixels,
+    sliceWidth,
+    sliceZUm,
     metrics,
     params,
-    solverDiagnostics,
     volumeDiagnostics,
   ]);
 
@@ -1261,12 +1297,11 @@ export default function Home() {
     selectedRun ?? { conversion, oxygen, radicals, remaining };
 
   const displayMetrics = selectedRun?.metrics ?? metrics;
-  const displayLensMetrics = selectedRun?.lensMetrics ?? lensMetrics;
-  const displayLensPixels = selectedRun?.lensPixels ?? lensPixels;
-  const displayLensWidth = selectedRun?.lensWidth ?? lensWidth;
-  const displayLensHeight = selectedRun?.lensHeight ?? lensHeight;
-  const displaySolverDiagnostics =
-    selectedRun?.diagnostics ?? solverDiagnostics;
+  const displaySliceMetrics = selectedRun?.sliceMetrics ?? sliceMetrics;
+  const displaySlicePixels = selectedRun?.slicePixels ?? slicePixels;
+  const displaySliceWidth = selectedRun?.sliceWidth ?? sliceWidth;
+  const displaySliceHeight = selectedRun?.sliceHeight ?? sliceHeight;
+  const displaySliceZUm = selectedRun?.sliceZUm ?? sliceZUm;
   const displayVolumeDiagnostics =
     selectedRun?.volumeDiagnostics ?? volumeDiagnostics;
   const selectedLayerZ = layerPositions?.[selectedLayer] ?? 0.18;
@@ -1354,12 +1389,16 @@ export default function Home() {
               : multipassPathProgress(exposureProgress, appliedPasses)
         }
         selectedLayerZ={selectedLayerZ}
+        sectionEnabled={Boolean(sliceInfo) && sectionCutEnabled}
         voxelPitch={
           displayVolumeDiagnostics?.voxelPitchUm ?? [0.18, 0.17, 0.18]
         }
+        opticsPreview={opticsPreview}
         fieldMode={fieldMode}
         stage={stage}
       />
+
+      <FieldSelector fieldMode={fieldMode} onFieldMode={setFieldMode} />
 
       <header className="lab-header">
         <div className="brand-lockup">
@@ -1475,19 +1514,21 @@ export default function Home() {
       </nav>
 
       <ReactionLens
-        pixels={displayLensPixels}
-        width={displayLensWidth}
-        height={displayLensHeight}
+        pixels={displaySlicePixels}
+        width={displaySliceWidth}
+        height={displaySliceHeight}
+        sliceZUm={displaySliceZUm}
         fieldMode={fieldMode}
-        onFieldMode={setFieldMode}
         mobileOpen={mobileLensOpen}
         onMobileClose={() => {
           lensTriggerRef.current?.focus();
           setMobileLensOpen(false);
         }}
-        metrics={displayLensMetrics}
+        metrics={displaySliceMetrics}
         solverState={solverState}
-        diagnostics={displaySolverDiagnostics}
+        volumeDiagnostics={displayVolumeDiagnostics}
+        wasmMemoryBytes={wasmMemoryBytes}
+        updatesPerSecond={updatesPerSecond}
       />
 
       <aside
@@ -1797,23 +1838,35 @@ export default function Home() {
             </strong>
           </div>
           {sliceInfo && (
-            <label className="layer-scrubber">
-              <span>
-                Layer{" "}
-                <strong>
-                  {selectedLayer + 1}/{sliceInfo.layerCount} · z{" "}
-                  {formatNumber(selectedLayerZ, 2)} µm
-                </strong>
-              </span>
+            <div className="layer-scrubber">
+              <div className="layer-scrubber-heading">
+                <label htmlFor="inspection-layer">
+                  Layer{" "}
+                  <strong>
+                    {selectedLayer + 1}/{sliceInfo.layerCount} · z{" "}
+                    {formatNumber(selectedLayerZ, 2)} µm
+                  </strong>
+                </label>
+                <button
+                  className={sectionCutEnabled ? "active" : ""}
+                  type="button"
+                  aria-pressed={sectionCutEnabled}
+                  onClick={() => setSectionCutEnabled((value) => !value)}
+                >
+                  Section cut
+                </button>
+              </div>
               <input
+                id="inspection-layer"
                 aria-label="Inspected layer"
                 type="range"
                 min={0}
                 max={Math.max(0, sliceInfo.layerCount - 1)}
                 value={selectedLayer}
+                disabled={stage === "compare"}
                 onChange={(event) => setSelectedLayer(Number(event.target.value))}
               />
-            </label>
+            </div>
           )}
           <div className="integrity-readout">
             <span>

@@ -1,11 +1,18 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 
 const { isMainThread, parentPort } = require("node:worker_threads");
+const { readFileSync } = require("node:fs");
+const path = require("node:path");
 const {
-  ReactionLensSimulation,
+  preview_volume_psf,
+  WholeVolumeSimulation,
 } = require("../../.wasm-test/reaction_lens/reaction_lens.js");
 
 const parameters = {
+  layerHeight: 0.48,
+  hatchSpacing: 0.72,
+  hatchAngle: 37,
+  contourCount: 2,
   passes: 1,
   power: 16,
   speed: 45,
@@ -31,17 +38,21 @@ const parameters = {
 };
 
 try {
-  const simulation = new ReactionLensSimulation(
-    { exposureStepsTotal: 720, parameters },
-    0x07a1,
+  const occupancy = readFileSync(
+    path.join(__dirname, "../../public/benchy/3dbenchy-occupancy.bin"),
+  );
+  const simulation = new WholeVolumeSimulation(
+    { memoryBudgetBytes: 8 * 1024 * 1024, parameters },
+    occupancy,
   );
   const initial = simulation.get_diagnostics();
   const advanced = simulation.advance_exposure_steps(34);
   const firstReplay = simulation.get_diagnostics();
 
-  simulation.reset(0x07a1);
+  simulation.reset();
   simulation.advance_exposure_steps(34);
   const secondReplay = simulation.get_diagnostics();
+  const psfPreview = preview_volume_psf(1.4, 780, 64 * 1024 * 1024);
 
   let rejectedInvalidParameters = false;
   try {
@@ -57,6 +68,10 @@ try {
     replayChecksum: firstReplay.checksum,
     replayChecksumAfterReset: secondReplay.checksum,
     snapshotLength: simulation.snapshot_len(),
+    sliceLength: simulation.xy_slice_len(),
+    sliceWidth: simulation.xy_slice_width(),
+    sliceHeight: simulation.xy_slice_height(),
+    psfPreview,
     rejectedInvalidParameters,
   });
 } catch (error) {

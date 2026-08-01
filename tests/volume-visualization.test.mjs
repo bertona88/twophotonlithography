@@ -10,6 +10,10 @@ import {
   createVoxelMesh,
   voxelPathOpacity,
 } from "../app/voxel-rendering.js";
+import {
+  BEAM_ROTATION_X,
+  beamConeDimensions,
+} from "../app/optics-visualization.js";
 
 test("unaffected occupied voxels stay hidden", () => {
   assert.equal(voxelActivity("conversion", 0, 1, 0, 1), 0);
@@ -54,4 +58,45 @@ test("multi-pass exposure reveals the complete one-pass path per traversal", () 
   assert.equal(multipassPathProgress(0.5, 2), 1);
   assert.equal(multipassPathProgress(0.25, 3), 0.75);
   assert.equal(multipassPathProgress(1, 3), 1);
+});
+
+test("beam aperture widens with the Debye half-angle", () => {
+  const lowerNa = beamConeDimensions(Math.asin(0.7 / 1.52));
+  const higherNa = beamConeDimensions(Math.asin(1.4 / 1.52));
+
+  assert.ok(higherNa.radius > lowerNa.radius);
+  assert.ok(higherNa.length < lowerNa.length);
+  assert.ok(
+    Math.abs(higherNa.radius / higherNa.length - Math.tan(Math.asin(1.4 / 1.52))) <
+      1e-12,
+  );
+});
+
+test("beam cone opens above the focus instead of ending in a remote tip", () => {
+  const dimensions = beamConeDimensions(Math.asin(1.4 / 1.52));
+  const geometry = new THREE.ConeGeometry(
+    dimensions.radius,
+    dimensions.length,
+    32,
+    1,
+    true,
+  );
+  geometry.rotateX(BEAM_ROTATION_X);
+  geometry.translate(0, 0, dimensions.centerOffsetZ);
+
+  const positions = geometry.getAttribute("position");
+  let focusRadius = 0;
+  let apertureRadius = 0;
+  for (let index = 0; index < positions.count; index += 1) {
+    const radius = Math.hypot(positions.getX(index), positions.getY(index));
+    if (Math.abs(positions.getZ(index)) < 1e-6) {
+      focusRadius = Math.max(focusRadius, radius);
+    }
+    if (Math.abs(positions.getZ(index) - dimensions.length) < 1e-6) {
+      apertureRadius = Math.max(apertureRadius, radius);
+    }
+  }
+
+  assert.ok(focusRadius < 1e-6);
+  assert.ok(apertureRadius > dimensions.radius * 0.99);
 });

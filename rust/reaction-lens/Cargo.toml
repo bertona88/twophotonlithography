@@ -3,7 +3,7 @@ name = "reaction-lens-wasm"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
-description = "Deterministic Rust/Wasm reaction-diffusion core for the Two-Photon Lithography Reaction Lens"
+description = "Deterministic Rust/Wasm 3D reaction-diffusion core for the Two-Photon Lithography Lab"
 repository = "https://github.com/bertona88/twophotonlithography"
 publish = false
 

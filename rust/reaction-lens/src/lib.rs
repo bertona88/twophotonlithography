@@ -1,9 +1,8 @@
-//! Authoritative Reaction Lens solver.
+//! Rust numerical models for the Two-Photon Lithography Lab.
 //!
-//! The numerical core is platform-neutral and covered by native Rust tests.
-//! `wasm_api` only adapts small configuration objects and exposes a stable
-//! pointer to a separately packed render snapshot. The render snapshot never
-//! aliases the authoritative state arrays.
+//! The adaptive 3D volume is the only model exported through `wasm_api`.
+//! The older 2D core remains platform-neutral for native parity tests only.
+//! Wasm render and XY-slice snapshots never alias authoritative state arrays.
 
 mod parameters;
 mod simulation;
@@ -16,11 +15,12 @@ pub use simulation::{
     SNAPSHOT_FIELD_ORDER,
 };
 pub use whole_volume::{
-    VolumeDiagnostics, WholeVolumeConfig, WholeVolumeSimulation as WholeVolumeCore,
+    preview_vectorial_psf, PsfPreview, VolumeDiagnostics, WholeVolumeConfig,
+    WholeVolumeSimulation as WholeVolumeCore,
 };
 
 #[cfg(target_arch = "wasm32")]
 mod wasm_api;
 
 #[cfg(target_arch = "wasm32")]
-pub use wasm_api::{create_simulation, ReactionLensSimulation, WholeVolumeSimulation};
+pub use wasm_api::{preview_volume_psf, WholeVolumeSimulation};

@@ -5,9 +5,7 @@ import test from "node:test";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 
-const GRID_WIDTH = 112;
-const GRID_HEIGHT = 68;
-const CELL_COUNT = GRID_WIDTH * GRID_HEIGHT;
+const SLICE_FIELD_COUNT = 5;
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = path.resolve(TEST_DIR, "..");
 const CLIENT_ROOT = path.join(REPOSITORY_ROOT, "dist", "client");
@@ -120,10 +118,7 @@ test("production worker initializes browser Wasm and honors its message contract
       "the ready solver status",
     );
     assert.equal(ready.solver, "Rust/Wasm");
-    assert.equal(ready.diagnostics.gridWidth, GRID_WIDTH);
-    assert.equal(ready.diagnostics.gridHeight, GRID_HEIGHT);
-    assert.equal(ready.diagnostics.timestepModel, 0.016);
-    assert.ok(ready.diagnostics.wasmMemoryBytes > 0);
+    assert.ok(ready.wasmMemoryBytes > 0);
 
     const sliceResult = await waitForMessage(
       worker,
@@ -161,21 +156,12 @@ test("production worker initializes browser Wasm and honors its message contract
       (message) => message.type === "snapshot",
       "a Rust-backed snapshot",
     );
-    assert.equal(snapshot.lensWidth, GRID_WIDTH);
-    assert.equal(snapshot.lensHeight, GRID_HEIGHT);
-    assert.equal(snapshot.lens.byteLength, CELL_COUNT * 4);
-    assert.equal(snapshot.diagnostics.solver, "Rust/Wasm");
-    assert.deepEqual(snapshot.lensDiagnostics, snapshot.diagnostics);
-    assert.equal(snapshot.diagnostics.volume, undefined);
-    assert.equal(snapshot.diagnostics.fieldCount, 6);
-    assert.deepEqual(snapshot.diagnostics.fieldOrder, [
-      "photoinitiator",
-      "oxygen",
-      "radicalActivity",
-      "conversion",
-      "developer",
-      "remainingMass",
-    ]);
+    assert.equal(snapshot.sliceWidth, snapshot.volumeDiagnostics.gridWidth);
+    assert.equal(snapshot.sliceHeight, snapshot.volumeDiagnostics.gridHeight);
+    assert.equal(
+      snapshot.slicePixels.byteLength,
+      snapshot.sliceWidth * snapshot.sliceHeight * SLICE_FIELD_COUNT,
+    );
     assert.ok(snapshot.volumeDiagnostics.gridDepth > 0);
     assert.equal(
       snapshot.volumeDiagnostics.layerCount,
@@ -195,13 +181,65 @@ test("production worker initializes browser Wasm and honors its message contract
     ]) {
       assert.equal(snapshot.metrics[field], snapshot.volumeDiagnostics[field]);
     }
-    assert.equal(snapshot.lensMetrics.cellSizeNm, 135);
+    assert.deepEqual(snapshot.sliceMetrics.voxelPitchNm, [
+      Math.round(snapshot.volumeDiagnostics.voxelPitchUm[0] * 1000),
+      Math.round(snapshot.volumeDiagnostics.voxelPitchUm[1] * 1000),
+    ]);
     assert.ok(Math.abs(snapshot.metrics.pulseEnergyPj - 200) < 1e-9);
     assert.ok(Math.abs(snapshot.metrics.peakPowerW - 2000) < 1e-9);
-    assert.ok(snapshot.lensDiagnostics.ownedMemoryBytes > 0);
+    assert.ok(snapshot.volumeDiagnostics.ownedMemoryBytes > 0);
+    assert.ok(snapshot.wasmMemoryBytes > snapshot.volumeDiagnostics.ownedMemoryBytes);
+
+    const inspected = await postAndWait(
+      worker,
+      { type: "inspectSlice", zUm: layerPositions.at(-1) },
+      (message) => message.type === "sliceInspection",
+      "an authoritative layer inspection",
+    );
+    assert.equal(inspected.sliceWidth, snapshot.volumeDiagnostics.gridWidth);
+    assert.equal(inspected.sliceHeight, snapshot.volumeDiagnostics.gridHeight);
+    assert.ok(inspected.sliceZUm > 17);
+    assert.equal(inspected.volumeChecksum, snapshot.volumeDiagnostics.checksum);
+
+    const lowerNaPreview = await postAndWait(
+      worker,
+      {
+        type: "previewOptics",
+        requestId: 1,
+        na: 0.7,
+        wavelength: parameters.wavelength,
+      },
+      (message) =>
+        message.type === "opticsPreview" && message.requestId === 1,
+      "a lower-NA live optics preview",
+    );
+    const higherNaPreview = await postAndWait(
+      worker,
+      {
+        type: "previewOptics",
+        requestId: 2,
+        na: 1.4,
+        wavelength: parameters.wavelength,
+      },
+      (message) =>
+        message.type === "opticsPreview" && message.requestId === 2,
+      "a higher-NA live optics preview",
+    );
     assert.ok(
-      snapshot.lensDiagnostics.wasmMemoryBytes >
-        snapshot.lensDiagnostics.ownedMemoryBytes,
+      higherNaPreview.preview.coneHalfAngleRad >
+        lowerNaPreview.preview.coneHalfAngleRad,
+    );
+    assert.ok(
+      higherNaPreview.preview.fwhmRadiiUm[0] <
+        lowerNaPreview.preview.fwhmRadiiUm[0],
+    );
+    assert.ok(
+      higherNaPreview.preview.fwhmRadiiUm[2] <
+        lowerNaPreview.preview.fwhmRadiiUm[2],
+    );
+    assert.deepEqual(
+      higherNaPreview.preview,
+      snapshot.volumeDiagnostics.psfPreview,
     );
 
     for (const [patch, pattern] of [
@@ -273,7 +311,7 @@ test("production worker initializes browser Wasm and honors its message contract
         message.exposureProgress > 0,
       "an advanced exposure snapshot",
     );
-    assert.ok(advanced.diagnostics.exposureStep > 0);
+    assert.ok(advanced.volumeDiagnostics.exposureStep > 0);
 
     const paused = await postAndWait(
       worker,
@@ -300,8 +338,8 @@ test("production worker initializes browser Wasm and honors its message contract
       "exposure completion",
     );
     assert.equal(
-      exposureComplete.diagnostics.exposureStep,
-      exposureComplete.diagnostics.exposureStepsTotal,
+      exposureComplete.volumeDiagnostics.exposureStep,
+      exposureComplete.volumeDiagnostics.exposureStepsTotal,
     );
     assert.ok(exposureComplete.volumeDiagnostics.offTargetActiveVoxels > 0);
     assert.ok(exposureComplete.volumeDiagnostics.offTargetConversionMean > 0);
@@ -309,36 +347,34 @@ test("production worker initializes browser Wasm and honors its message contract
       exposureComplete.metrics.offTargetGelledFraction,
       exposureComplete.volumeDiagnostics.offTargetGelledFraction,
     );
-    const completedLens = new Uint8Array(exposureComplete.lens);
-    let encodedLensOxygenMean = 0;
-    let encodedLensConversionMean = 0;
-    for (let index = 0; index < CELL_COUNT; index += 1) {
-      encodedLensOxygenMean += completedLens[index * 4] / 255;
-      encodedLensConversionMean += completedLens[index * 4 + 2] / 255;
+    const completedSlice = new Uint8Array(exposureComplete.slicePixels);
+    let encodedSliceOxygenMean = 0;
+    let encodedSliceConversionMean = 0;
+    let targetCells = 0;
+    for (
+      let index = 0;
+      index < exposureComplete.sliceWidth * exposureComplete.sliceHeight;
+      index += 1
+    ) {
+      const source = index * SLICE_FIELD_COUNT;
+      if (completedSlice[source + 4] === 0) continue;
+      targetCells += 1;
+      encodedSliceOxygenMean += completedSlice[source] / 255;
+      encodedSliceConversionMean += completedSlice[source + 2] / 255;
     }
-    encodedLensOxygenMean /= CELL_COUNT;
-    encodedLensConversionMean /= CELL_COUNT;
+    encodedSliceOxygenMean /= Math.max(1, targetCells);
+    encodedSliceConversionMean /= Math.max(1, targetCells);
+    assert.equal(exposureComplete.sliceMetrics.targetCells, targetCells);
     assert.ok(
       Math.abs(
-        exposureComplete.lensMetrics.oxygenMean - encodedLensOxygenMean,
+        exposureComplete.sliceMetrics.oxygenMean - encodedSliceOxygenMean,
       ) <= 1 / 255,
     );
     assert.ok(
       Math.abs(
-        exposureComplete.lensMetrics.conversionMean -
-          encodedLensConversionMean,
+        exposureComplete.sliceMetrics.conversionMean -
+          encodedSliceConversionMean,
       ) <= 1 / 255,
-    );
-    assert.ok(
-      Math.abs(
-        exposureComplete.lensMetrics.oxygenMean -
-          exposureComplete.volumeMetrics.oxygenMean,
-      ) > 1e-6 ||
-        Math.abs(
-          exposureComplete.lensMetrics.conversionMean -
-            exposureComplete.volumeMetrics.conversionMean,
-        ) > 1e-6,
-      "2D lens chemistry must remain distinct from 3D volume chemistry",
     );
 
     await postAndWait(
@@ -356,17 +392,8 @@ test("production worker initializes browser Wasm and honors its message contract
       "development completion",
     );
     assert.equal(
-      developed.diagnostics.developmentStep,
-      developed.diagnostics.developmentStepsTotal,
-    );
-    assert.equal(
       developed.volumeDiagnostics.developmentStep,
       developed.volumeDiagnostics.developmentStepsTotal,
-    );
-    assert.notEqual(
-      developed.diagnostics.developmentStepsTotal,
-      developed.volumeDiagnostics.developmentStepsTotal,
-      "the regression must exercise independently sized development schedules",
     );
     assert.equal(
       developed.metrics.survivingFraction,
