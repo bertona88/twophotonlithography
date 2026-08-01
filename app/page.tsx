@@ -74,6 +74,10 @@ type Metrics = ChemistryMetrics & {
   peakPowerW: number;
   checksum: string;
   cellSizeNm: number;
+  offTargetActiveVoxels: number;
+  offTargetConversionMean: number;
+  offTargetGelledFraction: number;
+  offTargetSurvivingFraction: number;
 };
 
 type LensMetrics = ChemistryMetrics & {
@@ -118,6 +122,12 @@ type VolumeDiagnostics = {
   conversionMean: number;
   gelledFraction: number;
   survivingFraction: number;
+  targetVoxels: number;
+  renderVoxels: number;
+  offTargetActiveVoxels: number;
+  offTargetConversionMean: number;
+  offTargetGelledFraction: number;
+  offTargetSurvivingFraction: number;
   checksum: string;
 };
 
@@ -474,6 +484,10 @@ const EMPTY_METRICS: Metrics = {
   peakPowerW: 2000,
   checksum: "00000000",
   cellSizeNm: 135,
+  offTargetActiveVoxels: 0,
+  offTargetConversionMean: 0,
+  offTargetGelledFraction: 0,
+  offTargetSurvivingFraction: 0,
 };
 
 const EMPTY_LENS_METRICS: LensMetrics = {
@@ -1650,6 +1664,19 @@ export default function Home() {
                           {displayVolumeDiagnostics.psfKernelVoxels} voxels
                         </strong>
                       </label>
+                      <label>
+                        Render / target
+                        <strong>
+                          {displayVolumeDiagnostics.renderVoxels.toLocaleString()} /{" "}
+                          {displayVolumeDiagnostics.targetVoxels.toLocaleString()}
+                        </strong>
+                      </label>
+                      <label>
+                        Off-target activity
+                        <strong>
+                          {displayVolumeDiagnostics.offTargetActiveVoxels.toLocaleString()} voxels
+                        </strong>
+                      </label>
                     </div>
                   </>
                 )}
@@ -1680,9 +1707,10 @@ export default function Home() {
                 <code>∂ₜr = Dᵣ∇²r + ηsp − (δ + qo)r − κr²</code>
                 <code>∂ₜo = Dₒ∇²o − χqor</code>
                 <code>∂ₜx = γr(1 − x)</code>
+                <code>∂ₜm = −kᵈ cᵈ(depth) m / exp(ρx)</code>
                 <p>
-                  The full volume, exposure, threshold conversion, oxygen
-                  inhibition, and development state are owned by Rust/Wasm.
+                  Rust/Wasm owns the full exposure field, off-target spill, and
+                  bath-accessible development state.
                 </p>
               </div>
             )}
@@ -1789,9 +1817,15 @@ export default function Home() {
           )}
           <div className="integrity-readout">
             <span>
-              volume gel{" "}
+              target gel{" "}
               <strong>
                 {(displayMetrics.gelledFraction * 100).toFixed(1)}%
+              </strong>
+            </span>
+            <span title={`${displayMetrics.offTargetActiveVoxels} affected voxels`}>
+              spill gel{" "}
+              <strong>
+                {(displayMetrics.offTargetGelledFraction * 100).toFixed(1)}%
               </strong>
             </span>
             <span>

@@ -140,6 +140,15 @@ test("production worker initializes browser Wasm and honors its message contract
     assert.equal(pathPositions.length % 6, 0);
     assert.ok(renderPositions.length > 0);
     assert.equal(renderPositions.length % 3, 0);
+    const renderedZ = [];
+    for (let index = 2; index < renderPositions.length; index += 3) {
+      renderedZ.push(renderPositions[index]);
+    }
+    assert.ok(Math.max(...renderedZ) > 17);
+    assert.ok(
+      renderedZ.filter((value) => value > 14).length > 100,
+      "render sampling must preserve sparse cabin and chimney voxels",
+    );
     assert.equal(sliceResult.layerCount, layerPositions.length);
     assert.equal(sliceResult.passes, parameters.passes);
     assert.ok(layerPositions.length > 0);
@@ -294,6 +303,12 @@ test("production worker initializes browser Wasm and honors its message contract
       exposureComplete.diagnostics.exposureStep,
       exposureComplete.diagnostics.exposureStepsTotal,
     );
+    assert.ok(exposureComplete.volumeDiagnostics.offTargetActiveVoxels > 0);
+    assert.ok(exposureComplete.volumeDiagnostics.offTargetConversionMean > 0);
+    assert.equal(
+      exposureComplete.metrics.offTargetGelledFraction,
+      exposureComplete.volumeDiagnostics.offTargetGelledFraction,
+    );
     const completedLens = new Uint8Array(exposureComplete.lens);
     let encodedLensOxygenMean = 0;
     let encodedLensConversionMean = 0;
@@ -358,6 +373,10 @@ test("production worker initializes browser Wasm and honors its message contract
       developed.volumeDiagnostics.survivingFraction,
     );
     assert.ok(developed.metrics.survivingFraction < 1);
+    assert.equal(
+      developed.metrics.offTargetSurvivingFraction,
+      developed.volumeDiagnostics.offTargetSurvivingFraction,
+    );
 
     const reset = await postAndWait(
       worker,

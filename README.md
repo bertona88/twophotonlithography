@@ -203,6 +203,8 @@ a commercial photoresist.
 - The whole-volume optical kernel is a circular-polarization vectorial Debye
   integral with a two-photon `I²` source. Thermal effects, shrinkage, stress,
   and experimentally calibrated development kinetics remain outside scope.
+- Developer ingress uses deterministic distance from bath-accessible specimen
+  surfaces rather than a fluid-flow or moving-interface solve.
 
 The recommended next milestone is **validated arbitrary-mesh import and
 experimental calibration against a named resin/process dataset**.

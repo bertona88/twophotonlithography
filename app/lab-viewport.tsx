@@ -8,6 +8,7 @@ import {
   lineSegmentDrawCount,
   voxelActivity,
 } from "./volume-visualization";
+import { createVoxelMesh, voxelPathOpacity } from "./voxel-rendering";
 
 export type FieldMode = "conversion" | "oxygen" | "radicals" | "development";
 
@@ -52,6 +53,7 @@ const AMBER = new THREE.Color("#ff8a3d");
 const IVORY = new THREE.Color("#f1e4c8");
 const SLATE = new THREE.Color("#69728e");
 const DARK = new THREE.Color("#111724");
+const MAX_RENDER_VOXELS = 60_000;
 
 async function loadBenchyTarget(scene: THREE.Scene, signal: AbortSignal) {
   const response = await fetch("/benchy/3dbenchy-mesh.bin", { signal });
@@ -173,19 +175,7 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
   );
   scene.add(path);
 
-  const materialPoints = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshBasicMaterial({
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.82,
-      depthWrite: true,
-      blending: THREE.NormalBlending,
-    }),
-    60_000,
-  );
-  materialPoints.count = 0;
-  materialPoints.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  const materialPoints = createVoxelMesh(THREE, MAX_RENDER_VOXELS);
   materialPoints.visible = false;
   scene.add(materialPoints);
 
@@ -332,6 +322,7 @@ export default function LabViewport({
   selectedLayerZ,
   voxelPitch,
   fieldMode,
+  stage,
 }: LabViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -399,7 +390,10 @@ export default function LabViewport({
   useEffect(() => {
     const handles = handlesRef.current;
     if (!handles || !macroPositions) return;
-    const count = Math.min(60_000, Math.floor(macroPositions.length / 3));
+    const count = Math.min(
+      MAX_RENDER_VOXELS,
+      Math.floor(macroPositions.length / 3),
+    );
     const matrix = new THREE.Matrix4();
     const position = new THREE.Vector3();
     const scale = new THREE.Vector3(
@@ -471,6 +465,9 @@ export default function LabViewport({
       handles.materialPoints.instanceColor.needsUpdate = true;
     }
     handles.materialPoints.visible = visible;
+    const material = handles.materialPoints.material as THREE.MeshBasicMaterial;
+    material.opacity =
+      fieldMode === "conversion" || fieldMode === "development" ? 0.94 : 0.76;
   }, [
     conversion,
     oxygen,
@@ -491,7 +488,9 @@ export default function LabViewport({
         progress,
       ),
     );
-  }, [pathPositions, progress]);
+    const material = handles.path.material as THREE.LineBasicMaterial;
+    material.opacity = voxelPathOpacity(stage, progress);
+  }, [pathPositions, progress, stage]);
 
   useEffect(() => {
     const handles = handlesRef.current;

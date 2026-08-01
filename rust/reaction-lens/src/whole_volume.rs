@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use crate::{Parameters, ValidationError};
 
@@ -7,6 +7,8 @@ const BASE_DIMS: [usize; 3] = [128, 72, 104];
 const BASE_ORIGIN_UM: [f64; 3] = [-11.357_723_577, -6.023_313_349, -0.175_549_622];
 const BASE_PITCH_UM: [f64; 3] = [0.178_861_789, 0.169_670_799, 0.177_774_811];
 const MAX_RENDER_VOXELS: usize = 60_000;
+const TARGET_RENDER_VOXELS: usize = 45_000;
+const RENDER_HALO_PASSES: usize = 4;
 const TWO_PI: f64 = std::f64::consts::PI * 2.0;
 const TWO_PHOTON_DOSE_RATE: f64 = 2_200.0;
 const MAX_RADICAL_ACTIVITY: f64 = 8.0;
@@ -50,6 +52,12 @@ pub struct VolumeDiagnostics {
     pub conversion_mean: f64,
     pub gelled_fraction: f64,
     pub surviving_fraction: f64,
+    pub target_voxels: usize,
+    pub render_voxels: usize,
+    pub off_target_active_voxels: usize,
+    pub off_target_conversion_mean: f64,
+    pub off_target_gelled_fraction: f64,
+    pub off_target_surviving_fraction: f64,
     pub checksum: String,
 }
 
@@ -145,6 +153,7 @@ pub struct WholeVolumeSimulation {
     conversion: Vec<f32>,
     remaining: Vec<f32>,
     developer_integral: Vec<f32>,
+    developer_depth_um: Vec<f32>,
     scratch_photoinitiator: Vec<f32>,
     scratch_oxygen: Vec<f32>,
     scratch_radicals: Vec<f32>,
@@ -209,7 +218,14 @@ impl WholeVolumeSimulation {
             .iter()
             .map(|index| *index as usize)
             .collect();
-        let render_indices = sample_indices(&occupied_render_indices, MAX_RENDER_VOXELS);
+        let render_indices = build_render_indices(
+            &occupancy,
+            &occupied_render_indices,
+            dims,
+            MAX_RENDER_VOXELS,
+        );
+        let developer_depth_um =
+            target_developer_depths(&occupancy, &occupied_render_indices, dims, pitch_um);
         let scan_path_segments =
             build_scan_path_segments(&scan_schedule.path, dims, BASE_ORIGIN_UM, pitch_um);
         let mut simulation = Self {
@@ -219,6 +235,7 @@ impl WholeVolumeSimulation {
             conversion: vec![0.0; len],
             remaining: vec![1.0; len],
             developer_integral: vec![0.0; len],
+            developer_depth_um,
             scratch_photoinitiator: vec![0.0; len],
             scratch_oxygen: vec![0.0; len],
             scratch_radicals: vec![0.0; len],
@@ -575,28 +592,39 @@ impl WholeVolumeSimulation {
         );
         let dt = self.parameters.development_time / self.development_steps_total as f64;
         for _ in 0..count {
+            if self.development_step == 0 {
+                for index in 0..self.occupancy.len() {
+                    if self.occupancy[index] == 0 && self.active[index] == 0 {
+                        self.remaining[index] = 0.0;
+                    }
+                }
+            }
             for position in 0..self.occupied_indices.len() {
                 let index = self.occupied_indices[position] as usize;
-                let [x, y, z] = index_to_ijk(index, self.dims);
-                let edge = x
-                    .min(self.dims[0] - 1 - x)
-                    .min(y.min(self.dims[1] - 1 - y))
-                    .min(z.min(self.dims[2] - 1 - z)) as f64;
-                let depth_um =
-                    (edge + 0.5) * self.pitch_um[0].min(self.pitch_um[1]).min(self.pitch_um[2]);
-                let ingress_rate = 0.22 / (depth_um * depth_um + 0.04);
-                self.developer_integral[index] += (ingress_rate * dt) as f32;
-                let developer = 1.0 - (-(self.developer_integral[index] as f64)).exp();
-                let gel = ((self.conversion[index] as f64 - self.parameters.gel_point)
-                    / (1.0 - self.parameters.gel_point))
-                    .clamp(0.0, 1.0);
-                let resistance = (self.parameters.developer_resistance * gel).exp();
-                let loss = self.parameters.developer_rate * developer * dt / resistance;
-                self.remaining[index] = (self.remaining[index] as f64 * (-loss).exp()) as f32;
+                self.advance_developer_at(index, self.developer_depth_um[position] as f64, dt);
+            }
+            let bath_depth = 0.5 * self.pitch_um[0].min(self.pitch_um[1]).min(self.pitch_um[2]);
+            for position in 0..self.active_indices.len() {
+                let index = self.active_indices[position] as usize;
+                if self.occupancy[index] == 0 {
+                    self.advance_developer_at(index, bath_depth, dt);
+                }
             }
             self.development_step += 1;
         }
         count
+    }
+
+    fn advance_developer_at(&mut self, index: usize, depth_um: f64, dt: f64) {
+        let ingress_rate = 0.22 / (depth_um * depth_um + 0.04);
+        self.developer_integral[index] += (ingress_rate * dt) as f32;
+        let developer = 1.0 - (-(self.developer_integral[index] as f64)).exp();
+        let gel = ((self.conversion[index] as f64 - self.parameters.gel_point)
+            / (1.0 - self.parameters.gel_point))
+            .clamp(0.0, 1.0);
+        let resistance = (self.parameters.developer_resistance * gel).exp();
+        let loss = self.parameters.developer_rate * developer * dt / resistance;
+        self.remaining[index] = (self.remaining[index] as f64 * (-loss).exp()) as f32;
     }
 
     fn rebuild_psf(&mut self) {
@@ -664,6 +692,7 @@ impl WholeVolumeSimulation {
             + self.conversion.capacity() * 4
             + self.remaining.capacity() * 4
             + self.developer_integral.capacity() * 4
+            + self.developer_depth_um.capacity() * std::mem::size_of::<f32>()
             + self.scratch_photoinitiator.capacity() * std::mem::size_of::<f32>()
             + self.scratch_oxygen.capacity() * std::mem::size_of::<f32>()
             + self.scratch_radicals.capacity() * std::mem::size_of::<f32>()
@@ -693,6 +722,22 @@ impl WholeVolumeSimulation {
             gelled += (self.conversion[index] as f64 >= self.parameters.gel_point) as usize;
             surviving += (self.remaining[index] >= 0.5) as usize;
         }
+        let mut off_target_active = 0_usize;
+        let mut off_target_conversion_sum = 0.0;
+        let mut off_target_gelled = 0_usize;
+        let mut off_target_surviving = 0_usize;
+        for &index in &self.active_indices {
+            let index = index as usize;
+            if self.occupancy[index] != 0 {
+                continue;
+            }
+            off_target_active += 1;
+            off_target_conversion_sum += self.conversion[index] as f64;
+            off_target_gelled +=
+                (self.conversion[index] as f64 >= self.parameters.gel_point) as usize;
+            off_target_surviving += (self.remaining[index] >= 0.5) as usize;
+        }
+        let off_target_denominator = off_target_active.max(1) as f64;
         VolumeDiagnostics {
             solver: "Rust/Wasm 3D volume",
             quality_tier: self.tier.name,
@@ -726,6 +771,12 @@ impl WholeVolumeSimulation {
             conversion_mean: conversion_sum / denominator,
             gelled_fraction: gelled as f64 / denominator,
             surviving_fraction: surviving as f64 / denominator,
+            target_voxels: self.occupied_indices.len(),
+            render_voxels: self.render_indices.len(),
+            off_target_active_voxels: off_target_active,
+            off_target_conversion_mean: off_target_conversion_sum / off_target_denominator,
+            off_target_gelled_fraction: off_target_gelled as f64 / off_target_denominator,
+            off_target_surviving_fraction: off_target_surviving as f64 / off_target_denominator,
             checksum: checksum(self),
         }
     }
@@ -1182,6 +1233,163 @@ fn sample_indices(source: &[usize], maximum: usize) -> Vec<usize> {
         .collect()
 }
 
+fn sample_indices_by_layer(source: &[usize], maximum: usize, dims: [usize; 3]) -> Vec<usize> {
+    if source.len() <= maximum {
+        return source.to_vec();
+    }
+    let mut layers = vec![Vec::new(); dims[2]];
+    for &index in source {
+        layers[index_to_ijk(index, dims)[2]].push(index);
+    }
+    let mut allocations = vec![0_usize; dims[2]];
+    let mut unsaturated: Vec<usize> = layers
+        .iter()
+        .enumerate()
+        .filter_map(|(z, layer)| (!layer.is_empty()).then_some(z))
+        .collect();
+    let mut remaining = maximum;
+    while remaining > 0 && !unsaturated.is_empty() {
+        let share = remaining.div_ceil(unsaturated.len());
+        let mut next = Vec::new();
+        let mut assigned = 0_usize;
+        for z in unsaturated {
+            let available = layers[z].len() - allocations[z];
+            let take = available.min(share).min(remaining - assigned);
+            allocations[z] += take;
+            assigned += take;
+            if allocations[z] < layers[z].len() {
+                next.push(z);
+            }
+            if assigned == remaining {
+                break;
+            }
+        }
+        if assigned == 0 {
+            break;
+        }
+        remaining -= assigned;
+        unsaturated = next;
+    }
+
+    let mut sampled = Vec::with_capacity(maximum - remaining);
+    for (z, layer) in layers.iter().enumerate() {
+        sampled.extend(sample_indices(layer, allocations[z]));
+    }
+    sampled
+}
+
+fn build_render_indices(
+    occupancy: &[u8],
+    occupied_indices: &[usize],
+    dims: [usize; 3],
+    maximum: usize,
+) -> Vec<usize> {
+    let target_budget = TARGET_RENDER_VOXELS
+        .min(maximum.saturating_mul(3) / 4)
+        .min(occupied_indices.len());
+    let mut render_indices = sample_indices_by_layer(occupied_indices, target_budget, dims);
+
+    let mut halo = occupancy.to_vec();
+    for _ in 0..RENDER_HALO_PASSES {
+        let previous = halo.clone();
+        for (index, included) in previous.iter().enumerate() {
+            if *included == 0 {
+                continue;
+            }
+            for neighbor in neighbor_indices(index, dims) {
+                halo[neighbor] = 1;
+            }
+        }
+    }
+    let surrounding: Vec<usize> = halo
+        .iter()
+        .enumerate()
+        .filter_map(|(index, included)| (*included != 0 && occupancy[index] == 0).then_some(index))
+        .collect();
+    let surrounding_budget = maximum.saturating_sub(render_indices.len());
+    render_indices.extend(sample_indices_by_layer(
+        &surrounding,
+        surrounding_budget,
+        dims,
+    ));
+
+    if render_indices.len() < maximum && target_budget < occupied_indices.len() {
+        let selected: std::collections::BTreeSet<usize> = render_indices.iter().copied().collect();
+        let remaining_target: Vec<usize> = occupied_indices
+            .iter()
+            .copied()
+            .filter(|index| !selected.contains(index))
+            .collect();
+        render_indices.extend(sample_indices_by_layer(
+            &remaining_target,
+            maximum - render_indices.len(),
+            dims,
+        ));
+    }
+    render_indices
+}
+
+fn target_developer_depths(
+    occupancy: &[u8],
+    occupied_indices: &[usize],
+    dims: [usize; 3],
+    pitch_um: [f64; 3],
+) -> Vec<f32> {
+    let mut bath = vec![0_u8; occupancy.len()];
+    let mut bath_queue = VecDeque::new();
+    for index in 0..occupancy.len() {
+        let [x, y, z] = index_to_ijk(index, dims);
+        let boundary =
+            x == 0 || x + 1 == dims[0] || y == 0 || y + 1 == dims[1] || z == 0 || z + 1 == dims[2];
+        if boundary && occupancy[index] == 0 {
+            bath[index] = 1;
+            bath_queue.push_back(index);
+        }
+    }
+    while let Some(index) = bath_queue.pop_front() {
+        for neighbor in neighbor_indices(index, dims) {
+            if occupancy[neighbor] == 0 && bath[neighbor] == 0 {
+                bath[neighbor] = 1;
+                bath_queue.push_back(neighbor);
+            }
+        }
+    }
+
+    let mut depth_steps = vec![u16::MAX; occupancy.len()];
+    let mut material_queue = VecDeque::new();
+    for &index in occupied_indices {
+        let [x, y, z] = index_to_ijk(index, dims);
+        let touches_domain =
+            x == 0 || x + 1 == dims[0] || y == 0 || y + 1 == dims[1] || z == 0 || z + 1 == dims[2];
+        let touches_bath = neighbor_indices(index, dims)
+            .iter()
+            .any(|neighbor| bath[*neighbor] != 0);
+        if touches_domain || touches_bath {
+            depth_steps[index] = 0;
+            material_queue.push_back(index);
+        }
+    }
+    while let Some(index) = material_queue.pop_front() {
+        let next_depth = depth_steps[index].saturating_add(1);
+        for neighbor in neighbor_indices(index, dims) {
+            if occupancy[neighbor] != 0 && depth_steps[neighbor] == u16::MAX {
+                depth_steps[neighbor] = next_depth;
+                material_queue.push_back(neighbor);
+            }
+        }
+    }
+
+    let pitch = pitch_um.into_iter().fold(f64::INFINITY, f64::min);
+    occupied_indices
+        .iter()
+        .map(|index| {
+            let steps = depth_steps[*index];
+            assert_ne!(steps, u16::MAX, "occupied material must reach the bath");
+            ((steps as f64 + 0.5) * pitch) as f32
+        })
+        .collect()
+}
+
 fn build_vectorial_psf(
     na: f64,
     wavelength_nm: f64,
@@ -1422,9 +1630,9 @@ fn checksum(simulation: &WholeVolumeSimulation) -> String {
         }
     }
     // P/O/R/X can only differ from their homogeneous initial conditions on
-    // the active diffusion domain. Development state can only change on the
-    // target occupancy. Hash those complete authoritative mutable domains so
-    // diagnostics stay useful without scanning nine full dense arrays/frame.
+    // the active diffusion domain. Development state changes on the target
+    // occupancy and on active off-target spill. Hash those complete mutable
+    // domains without scanning every dense array on each UI frame.
     for &index in &simulation.active_indices {
         let index = index as usize;
         hash ^= index as u32;
@@ -1441,6 +1649,21 @@ fn checksum(simulation: &WholeVolumeSimulation) -> String {
     }
     for &index in &simulation.occupied_indices {
         let index = index as usize;
+        hash ^= index as u32;
+        hash = hash.wrapping_mul(16_777_619);
+        for value in [
+            simulation.remaining[index],
+            simulation.developer_integral[index],
+        ] {
+            hash ^= value.to_bits();
+            hash = hash.wrapping_mul(16_777_619);
+        }
+    }
+    for &index in &simulation.active_indices {
+        let index = index as usize;
+        if simulation.occupancy[index] != 0 {
+            continue;
+        }
         hash ^= index as u32;
         hash = hash.wrapping_mul(16_777_619);
         for value in [
@@ -1742,6 +1965,70 @@ mod tests {
     }
 
     #[test]
+    fn rendering_preserves_sparse_upper_layers_and_includes_surrounding_resin() {
+        let dims = [8, 8, 8];
+        let mut occupancy = vec![0_u8; dims[0] * dims[1] * dims[2]];
+        for z in 1..4 {
+            for y in 1..7 {
+                for x in 1..7 {
+                    occupancy[flatten(x, y, z, dims)] = 1;
+                }
+            }
+        }
+        occupancy[flatten(3, 3, 6, dims)] = 1;
+        occupancy[flatten(4, 3, 6, dims)] = 1;
+        let occupied: Vec<usize> = occupancy
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| (*value != 0).then_some(index))
+            .collect();
+        let rendered = build_render_indices(&occupancy, &occupied, dims, 72);
+        assert_eq!(rendered.len(), 72);
+        assert!(rendered
+            .iter()
+            .any(|index| index_to_ijk(*index, dims)[2] == 6));
+        assert!(rendered.iter().any(|index| occupancy[*index] == 0));
+    }
+
+    #[test]
+    fn developer_depth_uses_only_bath_accessible_specimen_surfaces() {
+        let dims = [7, 7, 7];
+        let mut occupancy = vec![0_u8; dims[0] * dims[1] * dims[2]];
+        for z in 1..6 {
+            for y in 1..6 {
+                for x in 1..6 {
+                    occupancy[flatten(x, y, z, dims)] = 1;
+                }
+            }
+        }
+        occupancy[flatten(3, 3, 3, dims)] = 0;
+        let occupied: Vec<usize> = occupancy
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| (*value != 0).then_some(index))
+            .collect();
+        let depths = target_developer_depths(&occupancy, &occupied, dims, [0.2; 3]);
+        let depth_by_index: BTreeMap<usize, f32> = occupied.iter().copied().zip(depths).collect();
+        assert_eq!(depth_by_index[&flatten(1, 3, 3, dims)], 0.1);
+        assert!(
+            depth_by_index[&flatten(3, 3, 2, dims)] > 0.1,
+            "a sealed cavity must not become an artificial developer source"
+        );
+
+        occupancy[flatten(3, 3, 1, dims)] = 0;
+        occupancy[flatten(3, 3, 2, dims)] = 0;
+        let occupied_open: Vec<usize> = occupancy
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| (*value != 0).then_some(index))
+            .collect();
+        let open_depths = target_developer_depths(&occupancy, &occupied_open, dims, [0.2; 3]);
+        let open_by_index: BTreeMap<usize, f32> =
+            occupied_open.iter().copied().zip(open_depths).collect();
+        assert_eq!(open_by_index[&flatten(3, 2, 3, dims)], 0.1);
+    }
+
+    #[test]
     fn geometry_exports_and_metadata_are_consistent_at_every_tier() {
         let parameters = Parameters::default();
         let mut layer_counts = Vec::new();
@@ -2011,6 +2298,25 @@ mod tests {
     }
 
     #[test]
+    fn development_reports_and_retains_gelled_off_target_spill() {
+        let mut simulation = minimal_simulation(Parameters::default());
+        let target = simulation.occupied_indices[0] as usize;
+        let spill = neighbor_indices(target, simulation.dims)
+            .into_iter()
+            .find(|index| simulation.occupancy[*index] == 0)
+            .expect("the target surface must touch surrounding resin");
+        simulation.activate_index(spill);
+        simulation.conversion[spill] = 1.0;
+        let steps = simulation.development_steps_total;
+        assert_eq!(simulation.advance_development_steps(steps), steps);
+        let diagnostics = simulation.diagnostics();
+        assert_eq!(diagnostics.off_target_active_voxels, 1);
+        assert_eq!(diagnostics.off_target_gelled_fraction, 1.0);
+        assert!(diagnostics.off_target_surviving_fraction > 0.0);
+        assert!(simulation.remaining[spill] > 0.0);
+    }
+
+    #[test]
     fn full_benchy_exposure_reaches_lower_and_upper_features() {
         let mut simulation = WholeVolumeSimulation::try_new(
             WholeVolumeConfig {
@@ -2050,6 +2356,9 @@ mod tests {
             "the completed focus should reach the chimney"
         );
         let diagnostics = simulation.diagnostics();
+        assert!(diagnostics.off_target_active_voxels > 0);
+        assert!(diagnostics.off_target_conversion_mean > 0.0);
+        assert!(diagnostics.render_voxels <= MAX_RENDER_VOXELS);
         assert!(
             diagnostics.owned_memory_bytes <= diagnostics.memory_budget_bytes,
             "full tier owns {} bytes against a {} byte budget",

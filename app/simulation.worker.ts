@@ -132,6 +132,12 @@ type VolumeDiagnostics = {
   conversionMean: number;
   gelledFraction: number;
   survivingFraction: number;
+  targetVoxels: number;
+  renderVoxels: number;
+  offTargetActiveVoxels: number;
+  offTargetConversionMean: number;
+  offTargetGelledFraction: number;
+  offTargetSurvivingFraction: number;
   checksum: string;
 };
 
@@ -692,6 +698,10 @@ function emitSnapshot(volumeSnapshot?: VolumeSnapshot) {
       pulseEnergyPj * 1e-12 / Math.max(1e-15, params.pulseDuration * 1e-15),
     checksum: volumeDiagnostics.checksum,
     cellSizeNm: Math.round(Math.min(...volumeDiagnostics.voxelPitchUm) * 1000),
+    offTargetActiveVoxels: volumeDiagnostics.offTargetActiveVoxels,
+    offTargetConversionMean: volumeDiagnostics.offTargetConversionMean,
+    offTargetGelledFraction: volumeDiagnostics.offTargetGelledFraction,
+    offTargetSurvivingFraction: volumeDiagnostics.offTargetSurvivingFraction,
   };
 
   post(
