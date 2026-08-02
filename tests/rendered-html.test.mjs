@@ -31,3 +31,42 @@ test("renders development preview metadata", async () => {
   );
   assert.match(await response.text(), developmentPreviewMeta);
 });
+
+test("renders the model note and links the lab to its evidence sections", async () => {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("test", `method-${process.pid}-${Date.now()}`);
+  const { default: worker } = await import(workerUrl.href);
+  const environment = {
+    ASSETS: {
+      fetch: async () => new Response("Not found", { status: 404 }),
+    },
+  };
+  const executionContext = {
+    waitUntil() {},
+    passThroughOnException() {},
+  };
+
+  const articleResponse = await worker.fetch(
+    new Request("http://localhost/method", {
+      headers: { accept: "text/html" },
+    }),
+    environment,
+    executionContext,
+  );
+  assert.equal(articleResponse.status, 200);
+  const articleHtml = await articleResponse.text();
+  assert.match(articleHtml, /Inside the calculated voxel/);
+  assert.match(articleHtml, /Where the power is calculated/);
+  assert.match(articleHtml, /https:\/\/doi\.org\/10\.1098\/rspa\.1959\.0200/);
+  assert.match(articleHtml, /https:\/\/doi\.org\/10\.1364\/OE\.461969/);
+
+  const labResponse = await worker.fetch(
+    new Request("http://localhost/", {
+      headers: { accept: "text/html" },
+    }),
+    environment,
+    executionContext,
+  );
+  assert.equal(labResponse.status, 200);
+  assert.match(await labResponse.text(), /\/method#chemistry/);
+});

@@ -2189,7 +2189,14 @@ mod tests {
     }
 
     #[test]
-    fn slicer_validation_enforces_public_bounds() {
+    fn parameter_validation_enforces_public_bounds() {
+        Parameters {
+            speed: 100_000.0,
+            ..Parameters::default()
+        }
+        .validate()
+        .expect("the public scan-speed upper bound must be solver-safe");
+
         let parameters = Parameters {
             layer_height: 0.249,
             ..Parameters::default()

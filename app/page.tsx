@@ -28,7 +28,6 @@ type LabStage =
 
 type PanelTab = "specimen" | "path" | "light" | "resin" | "development";
 type DirtyKind = "slice" | "physics" | null;
-type PresetKey = "wake" | "cliff" | "fine";
 
 type ModelParams = {
   layerHeight: number;
@@ -268,9 +267,10 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         symbol: "v",
         unit: "µm/s",
         min: 8,
-        max: 140,
+        max: 100_000,
         step: 1,
         provenance: "input",
+        log: true,
       },
       {
         key: "na",
@@ -513,14 +513,16 @@ const PANEL_LABELS: Record<PanelTab, { short: string; full: string; glyph: strin
     development: { short: "Develop", full: "Development", glyph: "∇" },
   };
 
+const METHOD_ANCHORS: Record<PanelTab, string> = {
+  specimen: "volume",
+  path: "scan-path",
+  light: "optics",
+  resin: "chemistry",
+  development: "development",
+};
+
 const MOBILE_LAYOUT_QUERY =
   "(max-width: 840px), (max-height: 540px) and (pointer: coarse) and (orientation: landscape)";
-
-const PRESETS: Array<{ key: PresetKey; label: string }> = [
-  { key: "wake", label: "Twice-written wake" },
-  { key: "cliff", label: "Power cliff" },
-  { key: "fine", label: "Fine roof" },
-];
 
 function formatNumber(value: number, digits = 2) {
   if (Math.abs(value) < 0.001 && value !== 0) return value.toExponential(2);
@@ -588,7 +590,40 @@ function ParamRow({
   onChange: (value: number) => void;
   disabled: boolean;
 }) {
-  const provenance = definition.provenance ?? "input";
+  const sliderMin = definition.log ? 0 : definition.min;
+  const sliderMax = definition.log ? 1 : definition.max;
+  const boundedValue = Math.min(
+    definition.max,
+    Math.max(definition.min, value),
+  );
+  const sliderValue = definition.log
+    ? Math.log(boundedValue / definition.min) /
+      Math.log(definition.max / definition.min)
+    : value;
+
+  const handleSliderChange = (rawValue: number) => {
+    if (!definition.log) {
+      onChange(rawValue);
+      return;
+    }
+
+    const logarithmicValue =
+      definition.min *
+      (definition.max / definition.min) ** rawValue;
+    const stepCount = Math.round(
+      (logarithmicValue - definition.min) / definition.step,
+    );
+    onChange(
+      Math.min(
+        definition.max,
+        Math.max(
+          definition.min,
+          definition.min + stepCount * definition.step,
+        ),
+      ),
+    );
+  };
+
   return (
     <div className="param-row">
       <div className="param-row-heading">
@@ -596,18 +631,18 @@ function ParamRow({
           <span className="param-symbol">{definition.symbol}</span>
           <span className="param-name">{definition.name}</span>
         </div>
-        <span className={`provenance provenance-${provenance}`}>{provenance}</span>
       </div>
       <div className="param-control">
         <input
           aria-label={definition.name}
+          aria-valuetext={formatParameterValue(value, definition)}
           type="range"
-          min={definition.min}
-          max={definition.max}
-          step={definition.step}
-          value={value}
+          min={sliderMin}
+          max={sliderMax}
+          step={definition.log ? 0.001 : definition.step}
+          value={sliderValue}
           disabled={disabled}
-          onChange={(event) => onChange(Number(event.target.value))}
+          onChange={(event) => handleSliderChange(Number(event.target.value))}
         />
         <label className="numeric-entry">
           <input
@@ -880,7 +915,7 @@ export default function Home() {
   const [simulatedSeconds, setSimulatedSeconds] = useState(0);
   const [focus, setFocus] = useState<[number, number, number]>([0, 0, 7]);
   const [selectedLayer, setSelectedLayer] = useState(0);
-  const [sectionCutEnabled, setSectionCutEnabled] = useState(true);
+  const [sectionCutEnabled, setSectionCutEnabled] = useState(false);
   const [baseline, setBaseline] = useState<RunResult | null>(null);
   const [variant, setVariant] = useState<RunResult | null>(null);
   const [comparisonView, setComparisonView] = useState<"A" | "B">("B");
@@ -1379,43 +1414,6 @@ export default function Home() {
       ? exposureProgress * 0.82 + developmentProgress * 0.18
       : exposureProgress * 0.82;
 
-  const applyPreset = (preset: PresetKey) => {
-    let next = { ...params };
-    if (preset === "wake") {
-      next = {
-        ...next,
-        passes: 2,
-        speed: 38,
-        oxygen: 1.15,
-        oxygenDiffusion: 0.0022,
-      };
-    }
-    if (preset === "cliff") {
-      next = {
-        ...next,
-        power: 12.4,
-        speed: 58,
-        oxygenQuench: 10.5,
-        passes: 1,
-      };
-    }
-    if (preset === "fine") {
-      next = {
-        ...next,
-        layerHeight: 0.32,
-        hatchSpacing: 0.46,
-        hatchAngle: 53,
-      };
-    }
-    setParams(next);
-    const changesSlicer = Array.from(SLICER_KEYS).some(
-      (key) => next[key] !== params[key],
-    );
-    setDirty((current) =>
-      current === "slice" || changesSlicer ? "slice" : "physics",
-    );
-  };
-
   const handleDrop = (event: React.DragEvent) => {
     event.preventDefault();
     setDragging(false);
@@ -1652,15 +1650,23 @@ export default function Home() {
               <span className="eyebrow">Parameter sheet</span>
               <h2 id="parameter-sheet-title">{PANEL_LABELS[panelTab].full}</h2>
             </div>
-            <button
-              className="sheet-close"
-              ref={parameterCloseRef}
-              onClick={() => setPanelOpen(false)}
-              type="button"
-              aria-label="Close parameter sheet"
-            >
-              ×
-            </button>
+            <div className="sheet-heading-actions">
+              <a
+                className="sheet-method-link"
+                href={`/method#${METHOD_ANCHORS[panelTab]}`}
+              >
+                Model notes <span aria-hidden="true">↗</span>
+              </a>
+              <button
+                className="sheet-close"
+                ref={parameterCloseRef}
+                onClick={() => setPanelOpen(false)}
+                type="button"
+                aria-label="Close parameter sheet"
+              >
+                ×
+              </button>
+            </div>
           </div>
 
           <div
@@ -1679,22 +1685,6 @@ export default function Home() {
                 {PANEL_LABELS[tab].short}
               </button>
             ))}
-          </div>
-
-          <div className="mobile-presets" aria-label="Physics experiment presets">
-            <span className="eyebrow">Experiments</span>
-            <div>
-              {PRESETS.map((preset) => (
-                <button
-                  key={preset.key}
-                  onClick={() => applyPreset(preset.key)}
-                  type="button"
-                  disabled={stage === "slicing"}
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
           </div>
 
           <div className="parameter-sheet-body">
@@ -1803,42 +1793,9 @@ export default function Home() {
               </div>
             )}
 
-            {panelTab === "resin" && (
-              <div className="equation-card">
-                <div>
-                  <span className="eyebrow">Executed model</span>
-                  <span className="model-chip">3D · deterministic</span>
-                </div>
-                <code>|E|² = Debye(NA, λ, circular polarization)</code>
-                <code>dose ∝ |E|⁴ · P² / (f · τ)</code>
-                <code>∂ₜp = Dₚ∇²p − βsp</code>
-                <code>∂ₜr = Dᵣ∇²r + ηsp − (δ + qo)r − κr²</code>
-                <code>∂ₜo = Dₒ∇²o − χqor</code>
-                <code>∂ₜx = γr(1 − x)</code>
-                <code>∂ₜm = −kᵈ cᵈ(depth) m / exp(ρx)</code>
-                <p>
-                  Rust/Wasm owns the full exposure field, off-target spill, and
-                  bath-accessible development state.
-                </p>
-              </div>
-            )}
           </div>
         </section>
       </aside>
-
-      <div className="preset-rail" aria-label="Physics experiment presets">
-        <span className="eyebrow">Experiments</span>
-        {PRESETS.map((preset) => (
-          <button
-            key={preset.key}
-            onClick={() => applyPreset(preset.key)}
-            type="button"
-            disabled={stage === "slicing"}
-          >
-            {preset.label}
-          </button>
-        ))}
-      </div>
 
       {baseline && !dirty && (
         <section className="comparison-card glass-panel">
