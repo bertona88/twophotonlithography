@@ -663,10 +663,16 @@ function emitSnapshot(
     radicals,
     remaining,
   } = currentVolumeSnapshot;
-  const slice = readXYSlice(volumeDiagnostics);
   const exposureProgress = requireVolumeSimulation().exposure_progress();
   const developmentProgress = requireVolumeSimulation().development_progress();
   const focus = Array.from(requireVolumeSimulation().focus());
+  if (
+    stage === "exposing" ||
+    (stage === "paused" && exposureProgress >= 0.999)
+  ) {
+    inspectedZUm = focus[2];
+  }
+  const slice = readXYSlice(volumeDiagnostics);
 
   const pulseEnergyPj =
     (params.power * 1e-3) / (params.repetitionRate * 1e6) / 1e-12;

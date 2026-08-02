@@ -316,6 +316,11 @@ test("production worker initializes browser Wasm and honors its message contract
       "an advanced exposure snapshot",
     );
     assert.ok(advanced.volumeDiagnostics.exposureStep > 0);
+    assert.ok(
+      Math.abs(advanced.sliceZUm - advanced.focus[2]) <=
+        advanced.volumeDiagnostics.voxelPitchUm[2] / 2 + Number.EPSILON,
+      "the authoritative XY section must follow the laser focus during exposure",
+    );
 
     const paused = await postAndWait(
       worker,
@@ -361,6 +366,12 @@ test("production worker initializes browser Wasm and honors its message contract
       exposureComplete.metrics.offTargetGelledFraction,
       exposureComplete.volumeDiagnostics.offTargetGelledFraction,
     );
+    assert.ok(
+      Math.abs(exposureComplete.sliceZUm - exposureComplete.focus[2]) <=
+        exposureComplete.volumeDiagnostics.voxelPitchUm[2] / 2 +
+          Number.EPSILON,
+      "the exposure-complete section must remain on the final printed layer",
+    );
     const completedSlice = new Uint8Array(exposureComplete.slicePixels);
     let encodedSliceOxygenMean = 0;
     let encodedSliceConversionMean = 0;
@@ -391,11 +402,16 @@ test("production worker initializes browser Wasm and honors its message contract
       ) <= 1 / 255,
     );
 
-    await postAndWait(
+    const developing = await postAndWait(
       worker,
       { type: "develop" },
       (message) => message.type === "snapshot" && message.stage === "developing",
       "the development start snapshot",
+    );
+    assert.equal(
+      developing.sliceZUm,
+      exposureComplete.sliceZUm,
+      "development must preserve the inspected layer instead of sweeping the volume",
     );
     const developed = await waitForMessage(
       worker,

@@ -10,6 +10,10 @@ import {
 import dynamic from "next/dynamic";
 import type { FieldMode, PsfPreview } from "./lab-viewport";
 import { shouldIgnoreLabShortcut } from "./keyboard-shortcuts";
+import {
+  isLayerInspectionLocked,
+  nearestLayerIndex,
+} from "./layer-inspection";
 import { multipassPathProgress } from "./volume-visualization";
 
 const LabViewport = dynamic(() => import("./lab-viewport"), {
@@ -879,6 +883,7 @@ export default function Home() {
   const parameterSheetRef = useRef<HTMLElement | null>(null);
   const parameterCloseRef = useRef<HTMLButtonElement | null>(null);
   const opticsPreviewRequestRef = useRef(0);
+  const layerPositionsRef = useRef<Float32Array | null>(null);
   const latestArraysRef = useRef<{
     conversion: Uint8Array;
     oxygen: Uint8Array;
@@ -1065,9 +1070,11 @@ export default function Home() {
         return;
       }
       if (message.type === "sliceResult") {
+        const nextLayerPositions = new Float32Array(message.layerPositions);
         setPathPositions(new Float32Array(message.pathPositions));
         setMacroPositions(new Float32Array(message.renderPositions));
-        setLayerPositions(new Float32Array(message.layerPositions));
+        layerPositionsRef.current = nextLayerPositions;
+        setLayerPositions(nextLayerPositions);
         setSliceInfo({
           layerCount: message.layerCount,
           pathLengthUm: message.pathLengthUm,
@@ -1118,6 +1125,14 @@ export default function Home() {
       setDevelopmentProgress(message.developmentProgress);
       setSimulatedSeconds(message.simulatedSeconds);
       setFocus(message.focus);
+      if (
+        message.stage === "exposing" ||
+        (message.stage === "paused" && message.exposureProgress >= 0.999)
+      ) {
+        setSelectedLayer(
+          nearestLayerIndex(layerPositionsRef.current, message.sliceZUm),
+        );
+      }
       setVolumeDiagnostics(message.volumeDiagnostics);
       setWasmMemoryBytes(message.wasmMemoryBytes ?? 0);
       setUpdatesPerSecond(message.updatesPerSecond ?? 0);
@@ -1202,10 +1217,11 @@ export default function Home() {
 
   useEffect(() => {
     if (solverState !== "ready") return;
+    if (stage === "exposing") return;
     const zUm = layerPositions?.[selectedLayer];
     if (!Number.isFinite(zUm)) return;
     workerRef.current?.postMessage({ type: "inspectSlice", zUm });
-  }, [layerPositions, selectedLayer, solverState]);
+  }, [layerPositions, selectedLayer, solverState, stage]);
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -1220,10 +1236,10 @@ export default function Home() {
           workerRef.current?.postMessage({ type: "resume" });
         }
       }
-      if (event.key === "[") {
+      if (event.key === "[" && !isLayerInspectionLocked(stage)) {
         setSelectedLayer((value) => Math.max(0, value - 1));
       }
-      if (event.key === "]") {
+      if (event.key === "]" && !isLayerInspectionLocked(stage)) {
         setSelectedLayer((value) =>
           Math.min((sliceInfo?.layerCount ?? 1) - 1, value + 1),
         );
@@ -1409,10 +1425,23 @@ export default function Home() {
   const selectedLayerZ = layerPositions?.[selectedLayer] ?? 0.18;
 
   const activeProcess = processIndex(stage, exposureProgress);
-  const timelineProgress =
+  const overallProgress =
     stage === "developing" || stage === "complete" || stage === "compare"
       ? exposureProgress * 0.82 + developmentProgress * 0.18
       : exposureProgress * 0.82;
+  const layerInspectionLocked = isLayerInspectionLocked(stage);
+  const layerModeStatus =
+    stage === "exposing"
+      ? `Following laser · ${Math.round(exposureProgress * 100)}%`
+      : stage === "developing"
+        ? `Inspect freely · develop ${Math.round(developmentProgress * 100)}%`
+        : stage === "compare"
+          ? "Comparison view"
+          : stage === "complete"
+            ? "Developed · inspect freely"
+            : stage === "paused" && exposureProgress >= 0.999
+              ? "Exposure complete · inspect freely"
+              : "Manual inspection";
 
   const handleDrop = (event: React.DragEvent) => {
     event.preventDefault();
@@ -1858,10 +1887,10 @@ export default function Home() {
         </section>
       )}
 
-      <section className="causal-tape glass-panel" aria-label="Causal experiment tape">
+      <section className="causal-tape glass-panel" aria-label="Process state">
         <div className="tape-topline">
           <div className="tape-identity">
-            <span className="eyebrow">Causal tape</span>
+            <span className="eyebrow">Process state</span>
             <strong>
               {simulatedSeconds.toFixed(2)} s
               <small>physical exposure time</small>
@@ -1877,6 +1906,12 @@ export default function Home() {
                     {formatNumber(selectedLayerZ, 2)} µm
                   </strong>
                 </label>
+                <span
+                  className={`layer-mode ${stage === "exposing" ? "following" : ""}`}
+                  id="layer-mode-status"
+                >
+                  {layerModeStatus}
+                </span>
                 <button
                   className={sectionCutEnabled ? "active" : ""}
                   type="button"
@@ -1893,7 +1928,8 @@ export default function Home() {
                 min={0}
                 max={Math.max(0, sliceInfo.layerCount - 1)}
                 value={selectedLayer}
-                disabled={stage === "compare"}
+                disabled={layerInspectionLocked}
+                aria-describedby="layer-mode-status"
                 onChange={(event) => setSelectedLayer(Number(event.target.value))}
               />
             </div>
@@ -1916,29 +1952,6 @@ export default function Home() {
             </span>
           </div>
         </div>
-        <div className="timeline">
-          <div className="timeline-track">
-            <div
-              className="timeline-progress"
-              style={{ width: `${timelineProgress * 100}%` }}
-            />
-            <div
-              className="timeline-playhead"
-              style={{ left: `${timelineProgress * 100}%` }}
-            >
-              <i />
-            </div>
-            {Array.from({ length: 22 }).map((_, index) => (
-              <i
-                className="layer-tick"
-                key={index}
-                style={{ left: `${(index / 21) * 82}%` }}
-              />
-            ))}
-            <span className="phase-label expose-phase">EXPOSURE</span>
-            <span className="phase-label develop-phase">DEVELOP</span>
-          </div>
-        </div>
       </section>
 
       <section className="mobile-run-status glass-panel" aria-label="Simulation status">
@@ -1950,7 +1963,7 @@ export default function Home() {
             <small>Current stage</small>
             <strong>{stageLabel(stage, exposureProgress)}</strong>
           </span>
-          <output>{Math.round(timelineProgress * 100)}%</output>
+          <output>{Math.round(overallProgress * 100)}%</output>
         </div>
         <div
           className="mobile-run-progress"
@@ -1958,9 +1971,9 @@ export default function Home() {
           aria-label="Simulation progress"
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={Math.round(timelineProgress * 100)}
+          aria-valuenow={Math.round(overallProgress * 100)}
         >
-          <i style={{ width: `${timelineProgress * 100}%` }} />
+          <i style={{ width: `${overallProgress * 100}%` }} />
         </div>
       </section>
 
