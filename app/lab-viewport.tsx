@@ -120,7 +120,9 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
   renderer.toneMappingExposure = 1.15;
   renderer.localClippingEnabled = true;
 
-  const sectionPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 1e6);
+  // Keep material above the inspected layer visible; the section cut removes
+  // only geometry below the moving plane.
+  const sectionPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 1e6);
 
   const scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2("#05070d", 0.019);
@@ -152,9 +154,12 @@ function buildScene(canvas: HTMLCanvasElement, container: HTMLDivElement): Scene
     new THREE.BoxGeometry(31, 18, 0.65),
     new THREE.MeshPhysicalMaterial({
       color: "#121827",
+      transparent: true,
+      opacity: 0.18,
       roughness: 0.18,
       metalness: 0.34,
       clearcoat: 0.4,
+      depthWrite: false,
     }),
   );
   substrate.position.z = -0.46;
@@ -637,7 +642,7 @@ export default function LabViewport({
     if (!handles) return;
     handles.membrane.position.z = selectedLayerZ;
     handles.membrane.visible = sectionEnabled;
-    handles.sectionPlane.constant = sectionEnabled ? selectedLayerZ : 1e6;
+    handles.sectionPlane.constant = sectionEnabled ? -selectedLayerZ : 1e6;
   }, [sectionEnabled, selectedLayerZ]);
 
   return (

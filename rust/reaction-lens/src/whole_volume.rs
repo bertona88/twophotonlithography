@@ -11,6 +11,10 @@ const MAX_RENDER_VOXELS: usize = 60_000;
 const TARGET_RENDER_VOXELS: usize = 45_000;
 const RENDER_HALO_PASSES: usize = 4;
 const TWO_PI: f64 = std::f64::consts::PI * 2.0;
+const REFERENCE_NA: f64 = 1.4;
+const REFERENCE_WAVELENGTH_NM: f64 = 780.0;
+const PSF_RELATIVE_CUTOFF: f64 = 0.0005;
+const PSF_SUBVOXEL_RELATIVE_CUTOFF: f64 = 0.01;
 const TWO_PHOTON_DOSE_RATE: f64 = 2_200.0;
 const MAX_RADICAL_ACTIVITY: f64 = 8.0;
 const DIFFUSION_COURANT_SAFETY: f64 = 0.45;
@@ -144,6 +148,14 @@ struct KernelVoxel {
     dy: isize,
     dz: isize,
     weight: f32,
+}
+
+#[derive(Clone, Copy)]
+struct DebyeOptics {
+    theta_max: f64,
+    wave_number: f64,
+    field_scale: f64,
+    tier: Tier,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -863,7 +875,7 @@ impl WholeVolumeSimulation {
             owned_memory_bytes,
             downgrade_reason: (self.tier.name != "full")
                 .then_some("memory budget selected a coarser grid and PSF quadrature"),
-            psf_model: "vectorial Debye / circular polarization / two-photon I²",
+            psf_model: "vectorial Debye / fixed specimen power / adaptive voxel I²",
             psf_pupil_samples: self.tier.theta_samples * self.tier.phi_samples,
             psf_kernel_voxels: self.psf_kernel.len(),
             psf_preview: self.psf_preview.clone(),
@@ -1572,66 +1584,145 @@ fn build_vectorial_psf(
     pitch: [f64; 3],
 ) -> Vec<KernelVoxel> {
     let wavelength_um = wavelength_nm * 1e-3;
-    let theta_max = (na / REFRACTIVE_INDEX).clamp(0.0, 0.999_999).asin();
     let lateral = 0.61 * wavelength_um / na.max(0.1);
     let axial = 2.0 * REFRACTIVE_INDEX * wavelength_um / na.max(0.1).powi(2);
     let rx = ((2.4 * lateral / pitch[0]).ceil() as isize).clamp(2, 10);
     let ry = ((2.4 * lateral / pitch[1]).ceil() as isize).clamp(2, 10);
     let rz = ((2.2 * axial / pitch[2]).ceil() as isize).clamp(3, 18);
-    let wave_number = TWO_PI * REFRACTIVE_INDEX / wavelength_um;
-    let inv_sqrt_two = 1.0 / 2.0_f64.sqrt();
+    let optics = debye_optics(na, wavelength_nm, tier);
+    let point_peak = debye_two_photon([0.0; 3], optics);
+    let reference_optics = debye_optics(REFERENCE_NA, REFERENCE_WAVELENGTH_NM, tier);
+    let reference_point_peak = debye_two_photon([0.0; 3], reference_optics);
+    let reference_cell_source =
+        voxel_averaged_two_photon([0.0; 3], pitch, reference_optics, reference_point_peak);
     let mut raw = Vec::new();
-    let mut peak = 0.0_f64;
+    let mut cell_peak = 0.0_f64;
 
     for dz in -rz..=rz {
         for dy in -ry..=ry {
             for dx in -rx..=rx {
-                let x = dx as f64 * pitch[0];
-                let y = dy as f64 * pitch[1];
-                let z = dz as f64 * pitch[2];
-                let mut field = [[Complex::default(); 2]; 3];
-                for ti in 0..tier.theta_samples {
-                    let theta = theta_max * (ti as f64 + 0.5) / tier.theta_samples as f64;
-                    let sin_theta = theta.sin();
-                    let cos_theta = theta.cos();
-                    let apodization = cos_theta.sqrt() * sin_theta;
-                    for pi in 0..tier.phi_samples {
-                        let phi = TWO_PI * (pi as f64 + 0.5) / tier.phi_samples as f64;
-                        let sx = sin_theta * phi.cos();
-                        let sy = sin_theta * phi.sin();
-                        let sz = cos_theta;
-                        let phase = wave_number * (x * sx + y * sy + z * (sz - 1.0));
-                        // Circular input e=(x+i y)/sqrt(2), projected onto the
-                        // transverse plane of each refracted Debye ray.
-                        let dot_re = sx * inv_sqrt_two;
-                        let dot_im = sy * inv_sqrt_two;
-                        let amplitudes = [
-                            (inv_sqrt_two - sx * dot_re, -sx * dot_im),
-                            (-sy * dot_re, inv_sqrt_two - sy * dot_im),
-                            (-sz * dot_re, -sz * dot_im),
-                        ];
-                        for component in 0..3 {
-                            field[component][0].add_phase(
-                                amplitudes[component].0 * apodization,
-                                amplitudes[component].1 * apodization,
-                                phase,
-                            );
-                        }
-                    }
-                }
-                let intensity = field.iter().map(|pair| pair[0].norm_squared()).sum::<f64>();
-                let two_photon = intensity * intensity;
-                peak = peak.max(two_photon);
-                raw.push((dx, dy, dz, two_photon));
+                let center = [
+                    dx as f64 * pitch[0],
+                    dy as f64 * pitch[1],
+                    dz as f64 * pitch[2],
+                ];
+                let cell_source = voxel_averaged_two_photon(center, pitch, optics, point_peak);
+                cell_peak = cell_peak.max(cell_source);
+                raw.push((dx, dy, dz, cell_source));
             }
         }
     }
     raw.into_iter()
         .filter_map(|(dx, dy, dz, value)| {
-            let weight = (value / peak.max(1e-30)) as f32;
-            (weight >= 0.0005).then_some(KernelVoxel { dx, dy, dz, weight })
+            let relative_shape = value / cell_peak.max(1e-30);
+            let weight = (value / reference_cell_source.max(1e-30)) as f32;
+            (relative_shape >= PSF_RELATIVE_CUTOFF).then_some(KernelVoxel { dx, dy, dz, weight })
         })
         .collect()
+}
+
+fn debye_optics(na: f64, wavelength_nm: f64, tier: Tier) -> DebyeOptics {
+    let wavelength_um = wavelength_nm * 1e-3;
+    let theta_max = (na / REFRACTIVE_INDEX).clamp(0.0, 0.999_999).asin();
+    let pupil_radius = theta_max.sin().max(1e-12);
+    let pupil_area = std::f64::consts::PI * pupil_radius * pupil_radius;
+    let quadrature = theta_max / tier.theta_samples as f64 * TWO_PI / tier.phi_samples as f64;
+    DebyeOptics {
+        theta_max,
+        wave_number: TWO_PI * REFRACTIVE_INDEX / wavelength_um,
+        // The angular integral is normalized to fixed total pupil power. The
+        // wavelength factor preserves the expected tighter-focus intensity at
+        // shorter wavelengths. A reference cell below fixes the arbitrary
+        // absolute scale without erasing the NA dependence.
+        field_scale: quadrature / pupil_area.sqrt() * (REFERENCE_WAVELENGTH_NM / wavelength_nm),
+        tier,
+    }
+}
+
+fn debye_two_photon(position: [f64; 3], optics: DebyeOptics) -> f64 {
+    let [x, y, z] = position;
+    let inv_sqrt_two = 1.0 / 2.0_f64.sqrt();
+    let mut field = [Complex::default(); 3];
+    for ti in 0..optics.tier.theta_samples {
+        let theta = optics.theta_max * (ti as f64 + 0.5) / optics.tier.theta_samples as f64;
+        let sin_theta = theta.sin();
+        let cos_theta = theta.cos();
+        let apodization = cos_theta.sqrt() * sin_theta * optics.field_scale;
+        for pi in 0..optics.tier.phi_samples {
+            let phi = TWO_PI * (pi as f64 + 0.5) / optics.tier.phi_samples as f64;
+            let sx = sin_theta * phi.cos();
+            let sy = sin_theta * phi.sin();
+            let sz = cos_theta;
+            let phase = optics.wave_number * (x * sx + y * sy + z * (sz - 1.0));
+            // Circular input e=(x+i y)/sqrt(2), projected onto the
+            // transverse plane of each refracted Debye ray.
+            let dot_re = sx * inv_sqrt_two;
+            let dot_im = sy * inv_sqrt_two;
+            let amplitudes = [
+                (inv_sqrt_two - sx * dot_re, -sx * dot_im),
+                (-sy * dot_re, inv_sqrt_two - sy * dot_im),
+                (-sz * dot_re, -sz * dot_im),
+            ];
+            for component in 0..3 {
+                field[component].add_phase(
+                    amplitudes[component].0 * apodization,
+                    amplitudes[component].1 * apodization,
+                    phase,
+                );
+            }
+        }
+    }
+    let intensity = field.into_iter().map(Complex::norm_squared).sum::<f64>();
+    intensity * intensity
+}
+
+fn voxel_averaged_two_photon(
+    center: [f64; 3],
+    pitch: [f64; 3],
+    optics: DebyeOptics,
+    point_peak: f64,
+) -> f64 {
+    let center_source = debye_two_photon(center, optics);
+    let relative_source = center_source / point_peak.max(1e-30);
+    let samples = psf_subvoxel_samples(pitch, optics, relative_source);
+    if samples == [1; 3] {
+        return center_source;
+    }
+
+    let mut source_sum = 0.0;
+    let mut sample_count = 0_usize;
+    for iz in 0..samples[2] {
+        for iy in 0..samples[1] {
+            for ix in 0..samples[0] {
+                let ordinals = [ix, iy, iz];
+                let position = std::array::from_fn(|axis| {
+                    center[axis]
+                        + ((ordinals[axis] as f64 + 0.5) / samples[axis] as f64 - 0.5) * pitch[axis]
+                });
+                source_sum += debye_two_photon(position, optics);
+                sample_count += 1;
+            }
+        }
+    }
+    source_sum / sample_count as f64
+}
+
+fn psf_subvoxel_samples(pitch: [f64; 3], optics: DebyeOptics, relative_source: f64) -> [usize; 3] {
+    let needs_subvoxel = relative_source >= PSF_SUBVOXEL_RELATIVE_CUTOFF;
+    let wavelength_um = TWO_PI * REFRACTIVE_INDEX / optics.wave_number;
+    let na = optics.theta_max.sin() * REFRACTIVE_INDEX;
+    let estimated_fwhm = [
+        0.37 * wavelength_um / na.max(0.1),
+        0.37 * wavelength_um / na.max(0.1),
+        1.1 * REFRACTIVE_INDEX * wavelength_um / na.max(0.1).powi(2),
+    ];
+    std::array::from_fn(|axis| {
+        if needs_subvoxel && estimated_fwhm[axis] < 2.0 * pitch[axis] {
+            2
+        } else {
+            1
+        }
+    })
 }
 
 fn summarize_psf(
@@ -1642,7 +1733,7 @@ fn summarize_psf(
     pitch: [f64; 3],
 ) -> PsfPreview {
     PsfPreview {
-        model: "vectorial Debye / circular polarization / two-photon I²",
+        model: "vectorial Debye / fixed specimen power / adaptive voxel I²",
         quality_tier: tier.name,
         pupil_samples: tier.theta_samples * tier.phi_samples,
         kernel_voxels: kernel.len(),
@@ -1677,8 +1768,14 @@ fn axis_isovalue_radius(kernel: &[KernelVoxel], axis: usize, pitch_um: f64, targ
         .max()
         .unwrap_or(1)
         + 1;
+    let peak_weight = kernel
+        .iter()
+        .map(|voxel| voxel.weight as f64)
+        .fold(0.0_f64, f64::max)
+        .max(f64::EPSILON);
+    let target_weight = target * peak_weight;
     let mut previous_offset = 0_usize;
-    let mut previous_weight = 1.0_f64;
+    let mut previous_weight = peak_weight;
 
     for offset in 1..=maximum_offset {
         let mut weight_sum = 0.0_f64;
@@ -1696,9 +1793,9 @@ fn axis_isovalue_radius(kernel: &[KernelVoxel], axis: usize, pitch_um: f64, targ
         } else {
             weight_sum / sample_count as f64
         };
-        if weight <= target && previous_weight >= target {
+        if weight <= target_weight && previous_weight >= target_weight {
             let span = (previous_weight - weight).max(f64::EPSILON);
-            let fraction = ((previous_weight - target) / span).clamp(0.0, 1.0);
+            let fraction = ((previous_weight - target_weight) / span).clamp(0.0, 1.0);
             return (previous_offset as f64 + fraction) * pitch_um;
         }
         previous_offset = offset;
@@ -2013,6 +2110,50 @@ mod tests {
             && sample.dy == 0
             && sample.dz == 0
             && sample.weight > 0.99));
+    }
+
+    #[test]
+    fn fixed_specimen_power_preserves_na_and_wavelength_concentration() {
+        let tier = TIERS[0];
+        let pitch = tier_pitch(tier);
+        let center_weight = |na, wavelength_nm| {
+            build_vectorial_psf(na, wavelength_nm, tier, pitch)
+                .into_iter()
+                .find(|sample| sample.dx == 0 && sample.dy == 0 && sample.dz == 0)
+                .expect("the PSF kernel must include its focal cell")
+                .weight as f64
+        };
+
+        let lower_na = center_weight(0.9, REFERENCE_WAVELENGTH_NM);
+        let reference = center_weight(REFERENCE_NA, REFERENCE_WAVELENGTH_NM);
+        let longer_wavelength = center_weight(REFERENCE_NA, 1_064.0);
+
+        assert!((reference - 1.0).abs() < 1e-6);
+        assert!(reference > lower_na);
+        assert!(reference > longer_wavelength);
+    }
+
+    #[test]
+    fn adaptive_psf_quadrature_is_local_and_strictly_bounded() {
+        let full_pitch = tier_pitch(TIERS[0]);
+        let high_na = debye_optics(1.4, 780.0, TIERS[0]);
+        let center_samples = psf_subvoxel_samples(full_pitch, high_na, 1.0);
+        let tail_samples = psf_subvoxel_samples(full_pitch, high_na, 0.001);
+        let minimal_samples = psf_subvoxel_samples(
+            tier_pitch(TIERS[3]),
+            debye_optics(1.4, 780.0, TIERS[3]),
+            1.0,
+        );
+
+        assert_eq!(center_samples, [2, 2, 1]);
+        assert_eq!(tail_samples, [1, 1, 1]);
+        assert_eq!(minimal_samples, [2, 2, 2]);
+        assert!(minimal_samples.into_iter().product::<usize>() <= 8);
+
+        let point_source = debye_two_photon([0.0; 3], high_na);
+        let cell_source = voxel_averaged_two_photon([0.0; 3], full_pitch, high_na, point_source);
+        assert!(cell_source.is_finite() && cell_source > 0.0);
+        assert!(cell_source < point_source);
     }
 
     #[test]
@@ -2703,6 +2844,16 @@ mod tests {
             "the completed focus should reach the chimney"
         );
         let diagnostics = simulation.diagnostics();
+        assert!(
+            diagnostics.conversion_mean > 0.85,
+            "high-NA target conversion regressed to {}",
+            diagnostics.conversion_mean
+        );
+        assert!(
+            diagnostics.gelled_fraction > 0.97,
+            "high-NA target gel fraction regressed to {}",
+            diagnostics.gelled_fraction
+        );
         assert!(diagnostics.off_target_active_voxels > 0);
         assert!(diagnostics.off_target_conversion_mean > 0.0);
         assert!(diagnostics.render_voxels <= MAX_RENDER_VOXELS);

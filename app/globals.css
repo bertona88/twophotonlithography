@@ -1304,7 +1304,8 @@ input:focus-visible {
 
 .comparison-values {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  row-gap: 9px;
   margin-top: 10px;
   padding-top: 9px;
   border-top: 1px solid rgba(143, 159, 197, 0.1);
@@ -1323,6 +1324,7 @@ input:focus-visible {
   color: #d0d7e8;
   font-size: 8px;
   font-weight: 520;
+  overflow-wrap: anywhere;
 }
 
 .causal-tape {

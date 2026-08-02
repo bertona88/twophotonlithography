@@ -127,6 +127,7 @@ type SliceInfo = {
 };
 
 type RunResult = {
+  params: ModelParams;
   metrics: Metrics;
   sliceMetrics: SliceMetrics;
   conversion: Uint8Array;
@@ -138,7 +139,12 @@ type RunResult = {
   sliceHeight: number;
   sliceZUm: number;
   volumeDiagnostics: VolumeDiagnostics;
-  diffusion: number;
+};
+
+type ParameterChange = {
+  definition: ParameterDefinition;
+  before: number;
+  after: number;
 };
 
 type ParameterDefinition = {
@@ -463,6 +469,8 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
     ],
   };
 
+const PARAMETER_DEFINITIONS = Object.values(PARAMETER_GROUPS).flat();
+
 const EMPTY_METRICS: Metrics = {
   oxygenMean: 1,
   conversionMean: 0,
@@ -517,6 +525,51 @@ const PRESETS: Array<{ key: PresetKey; label: string }> = [
 function formatNumber(value: number, digits = 2) {
   if (Math.abs(value) < 0.001 && value !== 0) return value.toExponential(2);
   return value.toLocaleString("en-US", { maximumFractionDigits: digits });
+}
+
+function parameterChanges(
+  before: ModelParams,
+  after: ModelParams,
+): ParameterChange[] {
+  return PARAMETER_DEFINITIONS.flatMap((definition) =>
+    before[definition.key] === after[definition.key]
+      ? []
+      : [
+          {
+            definition,
+            before: before[definition.key],
+            after: after[definition.key],
+          },
+        ],
+  );
+}
+
+function formatParameterValue(
+  value: number,
+  definition: ParameterDefinition,
+) {
+  const digits =
+    definition.step < 0.0001
+      ? 5
+      : definition.step < 0.001
+        ? 4
+        : definition.step < 0.01
+          ? 3
+          : definition.step < 1
+            ? 2
+            : 0;
+  const formatted = formatNumber(value, digits);
+  return definition.unit ? `${formatted} ${definition.unit}` : formatted;
+}
+
+function describeParameterChanges(changes: ParameterChange[]) {
+  if (changes.length === 1) {
+    return `${changes[0].definition.name}: ${formatParameterValue(
+      changes[0].before,
+      changes[0].definition,
+    )} → ${formatParameterValue(changes[0].after, changes[0].definition)}`;
+  }
+  return `${changes.length} parameters changed`;
 }
 
 function formatMemory(bytes: number) {
@@ -785,7 +838,8 @@ function processIndex(stage: LabStage, exposureProgress: number) {
 export default function Home() {
   const workerRef = useRef<Worker | null>(null);
   const variantRunningRef = useRef(false);
-  const variantDiffusionRef = useRef(DEFAULT_PARAMS.oxygenDiffusion);
+  const activeRunParamsRef = useRef<ModelParams>({ ...DEFAULT_PARAMS });
+  const completedRunRef = useRef<RunResult | null>(null);
   const lensTriggerRef = useRef<HTMLButtonElement | null>(null);
   const parameterSheetRef = useRef<HTMLElement | null>(null);
   const parameterCloseRef = useRef<HTMLButtonElement | null>(null);
@@ -1035,7 +1089,8 @@ export default function Home() {
 
       if (message.stage === "complete" && variantRunningRef.current) {
         variantRunningRef.current = false;
-        setVariant({
+        const completedRun: RunResult = {
+          params: { ...activeRunParamsRef.current },
           metrics: nextVolumeMetrics,
           sliceMetrics: message.sliceMetrics,
           conversion: nextConversion.slice(),
@@ -1047,13 +1102,28 @@ export default function Home() {
           sliceHeight: message.sliceHeight,
           sliceZUm: message.sliceZUm,
           volumeDiagnostics: message.volumeDiagnostics,
-          diffusion: variantDiffusionRef.current,
-        });
+        };
+        completedRunRef.current = completedRun;
+        setVariant(completedRun);
         setStage("compare");
-        setNotice(
-          `Branch B completed at Dₒ ${variantDiffusionRef.current.toFixed(4)}; comparison metrics are ready.`,
-        );
+        setNotice("Branch B completed; comparison metrics are ready.");
       } else {
+        if (message.stage === "complete") {
+          completedRunRef.current = {
+            params: { ...activeRunParamsRef.current },
+            metrics: nextVolumeMetrics,
+            sliceMetrics: message.sliceMetrics,
+            conversion: nextConversion.slice(),
+            oxygen: nextOxygen.slice(),
+            radicals: nextRadicals.slice(),
+            remaining: nextRemaining.slice(),
+            slicePixels: nextSlicePixels.slice(),
+            sliceWidth: message.sliceWidth,
+            sliceHeight: message.sliceHeight,
+            sliceZUm: message.sliceZUm,
+            volumeDiagnostics: message.volumeDiagnostics,
+          };
+        }
         setStage(message.stage);
       }
     };
@@ -1148,6 +1218,7 @@ export default function Home() {
   const slice = useCallback(
     (nextParams = params) => {
       variantRunningRef.current = false;
+      completedRunRef.current = null;
       setDirty(null);
       setBaseline(null);
       setVariant(null);
@@ -1161,6 +1232,7 @@ export default function Home() {
 
   const applyPhysics = useCallback(() => {
     variantRunningRef.current = false;
+    completedRunRef.current = null;
     setDirty(null);
     setBaseline(null);
     setVariant(null);
@@ -1168,58 +1240,41 @@ export default function Home() {
     setStage("ready");
   }, [params]);
 
-  const branchOxygen = useCallback(() => {
-    const arrays = latestArraysRef.current;
-    if (!arrays || !slicePixels || !volumeDiagnostics) return;
-    const nextDiffusion = Math.min(0.012, params.oxygenDiffusion * 2);
-    if (nextDiffusion <= params.oxygenDiffusion) {
-      setNotice(
-        "Doubling the current oxygen diffusion would not produce a distinct branch.",
-      );
+  const runComparison = useCallback(() => {
+    const completedRun = completedRunRef.current;
+    if (!completedRun) return;
+    const changes = parameterChanges(completedRun.params, params);
+    if (!changes.length) {
+      setDirty(null);
+      setNotice("Change any parameter to create run B.");
       return;
     }
-    setBaseline({
-      metrics,
-      sliceMetrics,
-      conversion: arrays.conversion.slice(),
-      oxygen: arrays.oxygen.slice(),
-      radicals: arrays.radicals.slice(),
-      remaining: arrays.remaining.slice(),
-      slicePixels: slicePixels.slice(),
-      sliceWidth,
-      sliceHeight,
-      sliceZUm,
-      volumeDiagnostics,
-      diffusion: params.oxygenDiffusion,
-    });
+    setBaseline(completedRun);
     setVariant(null);
     setComparisonView("B");
-    const nextParams = {
-      ...params,
-      oxygenDiffusion: nextDiffusion,
-    };
-    setParams(nextParams);
-    variantDiffusionRef.current = nextParams.oxygenDiffusion;
+    setDirty(null);
+    activeRunParamsRef.current = { ...params };
     variantRunningRef.current = true;
-    workerRef.current?.postMessage({ type: "configure", params: nextParams });
-    workerRef.current?.postMessage({ type: "start" });
-    setStage("exposing");
-    setNotice(
-      `Branch B is replaying the identical path with Dₒ ${params.oxygenDiffusion.toFixed(4)} → ${nextDiffusion.toFixed(4)}.`,
+    const changesToolpath = changes.some(({ definition }) =>
+      SLICER_KEYS.has(definition.key),
     );
-  }, [
-    sliceHeight,
-    sliceMetrics,
-    slicePixels,
-    sliceWidth,
-    sliceZUm,
-    metrics,
-    params,
-    volumeDiagnostics,
-  ]);
+    if (changesToolpath) {
+      setStage("slicing");
+      workerRef.current?.postMessage({ type: "slice", params });
+    } else {
+      setStage("exposing");
+      workerRef.current?.postMessage({ type: "configure", params });
+    }
+    workerRef.current?.postMessage({ type: "start" });
+    setNotice(`Branch B is replaying with ${describeParameterChanges(changes)}.`);
+  }, [params]);
 
   const primaryAction = useCallback(() => {
     if (solverState !== "ready") return;
+    if (dirty && (stage === "complete" || stage === "compare")) {
+      runComparison();
+      return;
+    }
     if (dirty === "slice") {
       slice();
       return;
@@ -1233,6 +1288,7 @@ export default function Home() {
       return;
     }
     if (stage === "ready") {
+      activeRunParamsRef.current = { ...params };
       workerRef.current?.postMessage({ type: "start" });
       setStage("exposing");
       return;
@@ -1251,7 +1307,8 @@ export default function Home() {
       return;
     }
     if (stage === "complete") {
-      branchOxygen();
+      setPanelOpen(true);
+      setNotice("Change any parameter to create an A/B comparison.");
       return;
     }
     if (stage === "compare") {
@@ -1263,13 +1320,17 @@ export default function Home() {
     exposureProgress,
     slice,
     applyPhysics,
-    branchOxygen,
+    params,
+    runComparison,
     solverState,
   ]);
 
   const primaryLabel = useMemo(() => {
     if (solverState === "initializing") return "Loading Rust solver…";
     if (solverState === "error") return "Solver unavailable";
+    if (dirty && (stage === "complete" || stage === "compare")) {
+      return "Run A/B comparison";
+    }
     if (dirty === "slice") return "Apply & reslice";
     if (dirty === "physics") return "Apply & reset fields";
     if (stage === "model") return "Slice specimen";
@@ -1279,7 +1340,7 @@ export default function Home() {
     if (stage === "paused" && exposureProgress < 0.999) return "Resume exposure";
     if (stage === "paused") return "Admit developer";
     if (stage === "developing") return "Developing…";
-    if (stage === "complete") return "Fork oxygen diffusion";
+    if (stage === "complete") return "Change a parameter to compare";
     return `Show run ${comparisonView === "A" ? "B" : "A"}`;
   }, [dirty, stage, exposureProgress, comparisonView, solverState]);
 
@@ -1292,6 +1353,12 @@ export default function Home() {
     }
     return null;
   }, [baseline, comparisonView, stage, variant]);
+
+  const comparisonChanges = useMemo(
+    () =>
+      baseline ? parameterChanges(baseline.params, variant?.params ?? params) : [],
+    [baseline, params, variant],
+  );
 
   const displayArrays =
     selectedRun ?? { conversion, oxygen, radicals, remaining };
@@ -1773,12 +1840,16 @@ export default function Home() {
         ))}
       </div>
 
-      {baseline && (
+      {baseline && !dirty && (
         <section className="comparison-card glass-panel">
           <div className="comparison-heading">
             <div>
               <span className="eyebrow">Counterfactual branch</span>
-              <strong>Dₒ sweep · same path / same seed</strong>
+              <strong>
+                {comparisonChanges.length === 1
+                  ? `${comparisonChanges[0].definition.name} · deterministic replay`
+                  : `${comparisonChanges.length} parameters · deterministic replay`}
+              </strong>
             </div>
             <div className="ab-toggle">
               <button
@@ -1799,13 +1870,15 @@ export default function Home() {
             </div>
           </div>
           <div className="comparison-values">
-            <span>
-              diffusion
-              <strong>
-                {baseline.diffusion.toFixed(4)} →{" "}
-                {(variant?.diffusion ?? params.oxygenDiffusion).toFixed(4)}
-              </strong>
-            </span>
+            {comparisonChanges.map((change) => (
+              <span key={change.definition.key}>
+                {change.definition.name.toLowerCase()}
+                <strong>
+                  {formatParameterValue(change.before, change.definition)} →{" "}
+                  {formatParameterValue(change.after, change.definition)}
+                </strong>
+              </span>
+            ))}
             <span>
               gelled
               <strong>

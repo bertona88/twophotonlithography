@@ -16,7 +16,7 @@ path to deterministic reaction–diffusion polymerization and development.
   developer, and remaining mass
 - Development based on computed transport, conversion-dependent resistance,
   and remaining material
-- Deterministic replay and an oxygen-diffusion A/B branch
+- Deterministic A/B replay for any changed model parameter
 - Runtime diagnostics that identify the solver, grid, timestep, simulated model
   time, update rate, checksum, and Wasm memory use
 
@@ -194,8 +194,10 @@ a commercial photoresist.
   no stochastic term; equal inputs are deterministic without injected noise.
 - Time is nondimensional, and parameters are not fitted to a particular resin.
 - The whole-volume optical kernel is a circular-polarization vectorial Debye
-  integral with a two-photon `I²` source. Thermal effects, shrinkage, stress,
-  and experimentally calibrated development kinetics remain outside scope.
+  integral normalized to fixed specimen power, with adaptively volume-averaged
+  two-photon `I²` weights cached for under-resolved focal cells. Thermal
+  effects, shrinkage, stress, and experimentally calibrated development
+  kinetics remain outside scope.
 - Developer ingress uses deterministic distance from bath-accessible specimen
   surfaces rather than a fluid-flow or moving-interface solve.
 
