@@ -206,8 +206,10 @@ experimental calibration against a named resin/process dataset**.
 
 ## Repository map
 
-- `app/page.tsx` — laboratory UI, slicer state, timeline, controls, and
-  diagnostics
+- `app/page.tsx` — search-facing field-guide homepage and laboratory entry point
+- `app/lab/page.tsx` — interactive laboratory route
+- `app/lab-interface.tsx` — slicer state, timeline, controls, and diagnostics
+- `app/guides/` — scientific terminology, model-space, and parameter guides
 - `app/lab-viewport.tsx` — client-only Three.js viewport
 - `app/simulation.worker.ts` — Wasm initialization, authoritative volume
   scheduling, selected-plane extraction, and immutable snapshot transfer

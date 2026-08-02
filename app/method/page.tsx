@@ -1,11 +1,15 @@
 /* eslint-disable @next/next/no-html-link-for-pages */
 import type { Metadata } from "next";
+import { JsonLd } from "../site-chrome";
+import { absoluteUrl, pageMetadata, SITE_NAME } from "../site-config";
 
-export const metadata: Metadata = {
-  title: "Inside the model — Two-Photon Lithography Lab",
+export const metadata: Metadata = pageMetadata({
+  title: "Two-Photon Lithography Model: Optics, Chemistry and Development",
   description:
     "How the Causal Lithography Lab turns a focused femtosecond beam into exposure, reaction-diffusion chemistry, and a developed structure.",
-};
+  path: "/method",
+  type: "article",
+});
 
 const references = [
   {
@@ -79,8 +83,26 @@ function Citation({ children }: { children: React.ReactNode }) {
 export default function MethodPage() {
   return (
     <main className="method-page">
+      <JsonLd
+        data={{
+          "@context": "https://schema.org",
+          "@type": "Article",
+          headline: "How the two-photon lithography model works",
+          description:
+            "A mechanistic account of the optical, reaction–diffusion, and development model running in the browser laboratory.",
+          mainEntityOfPage: absoluteUrl("/method"),
+          datePublished: "2026-08-02",
+          dateModified: "2026-08-02",
+          author: {
+            "@type": "Organization",
+            name: SITE_NAME,
+            url: absoluteUrl("/"),
+          },
+          citation: references.map((reference) => reference.href),
+        }}
+      />
       <header className="method-nav">
-        <a className="method-brand" href="/" aria-label="Return to the lab">
+        <a className="method-brand" href="/" aria-label="Return to the field guide home">
           <span className="method-brand-mark" aria-hidden="true">
             <i />
             <i />
@@ -91,7 +113,7 @@ export default function MethodPage() {
             <small>causal lithography lab</small>
           </span>
         </a>
-        <a className="return-to-lab" href="/">
+        <a className="return-to-lab" href="/lab">
           Open the lab <span aria-hidden="true">↗</span>
         </a>
       </header>
@@ -99,8 +121,8 @@ export default function MethodPage() {
       <article className="method-article">
         <section className="method-hero" aria-labelledby="method-title">
           <div className="method-hero-copy">
-            <span className="method-kicker">Model note · 01</span>
-            <h1 id="method-title">Inside the calculated voxel</h1>
+            <span className="method-kicker">Model note · Inside the calculated voxel</span>
+            <h1 id="method-title">How the two-photon lithography model works</h1>
             <p>
               The lab is a mechanistic sketch: a vectorial focus drives a
               spatial reaction–diffusion model, then a bath-accessible
@@ -384,7 +406,7 @@ export default function MethodPage() {
                 <span className="method-kicker">Continue experimenting</span>
                 <h2>Return to the calculated volume.</h2>
               </div>
-              <a href="/">Open the lab <span aria-hidden="true">↗</span></a>
+              <a href="/lab">Open the lab <span aria-hidden="true">↗</span></a>
             </footer>
           </div>
         </div>

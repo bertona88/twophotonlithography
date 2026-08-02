@@ -45,13 +45,15 @@ async function productionWorkerPath() {
   const manifest = JSON.parse(
     await readFile(path.join(CLIENT_ROOT, ".vite", "manifest.json"), "utf8"),
   );
-  const pageChunk = await readFile(
-    path.join(CLIENT_ROOT, manifest["app/page.tsx"].file),
-    "utf8",
-  );
-  const match = pageChunk.match(/simulation\.worker-[\w-]+\.js/);
+  let match = null;
+  for (const entry of Object.values(manifest)) {
+    if (!entry.file?.endsWith(".js")) continue;
+    const chunk = await readFile(path.join(CLIENT_ROOT, entry.file), "utf8");
+    match = chunk.match(/simulation\.worker-[\w-]+\.js/);
+    if (match) break;
+  }
 
-  assert.ok(match, "the production page must reference a worker bundle");
+  assert.ok(match, "the production lab must reference a worker bundle");
   return path.join(CLIENT_ROOT, "assets", match[0]);
 }
 
