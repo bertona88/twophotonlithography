@@ -131,7 +131,7 @@ if ! curl \
   --retry-all-errors \
   --retry-delay 1 \
   "$HEALTH_URL" |
-  grep -F 'Two‑Photon Lithography' >/dev/null; then
+  grep -F 'Two-photon lithography, made visible.' >/dev/null; then
   rollback "$previous_target"
   exit 1
 fi
