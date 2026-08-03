@@ -3291,43 +3291,12 @@ body:has(.seo-site) {
 }
 
 .site-mark {
-  position: relative;
   display: block;
   width: 31px;
   height: 31px;
   flex: 0 0 auto;
-  border: 1px solid rgba(156, 176, 226, 0.24);
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(139, 92, 255, 0.16), transparent 68%);
-}
-
-.site-mark i {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  display: block;
-  border: 1px solid rgba(188, 167, 255, 0.72);
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-}
-
-.site-mark i:nth-child(1) {
-  width: 5px;
-  height: 5px;
-  background: #bca7ff;
-  box-shadow: 0 0 12px rgba(139, 92, 255, 0.9);
-}
-
-.site-mark i:nth-child(2) {
-  width: 16px;
-  height: 16px;
-  opacity: 0.6;
-}
-
-.site-mark i:nth-child(3) {
-  width: 25px;
-  height: 25px;
-  opacity: 0.23;
+  overflow: visible;
+  filter: drop-shadow(0 0 8px rgba(139, 92, 255, 0.16));
 }
 
 .site-brand > span:last-child {
@@ -3487,7 +3456,8 @@ body:has(.seo-site) {
   overflow: hidden;
   animation: site-reveal 980ms 80ms cubic-bezier(0.2, 0.78, 0.2, 1) both;
   background:
-    radial-gradient(ellipse at 53% 43%, rgba(188, 167, 255, 0.18), transparent 11%),
+    radial-gradient(ellipse at 53% 43%, rgba(139, 92, 255, 0.25), transparent 11%),
+    radial-gradient(ellipse at 53% 24%, rgba(255, 64, 82, 0.08), transparent 28%),
     radial-gradient(ellipse at 53% 43%, rgba(139, 92, 255, 0.12), transparent 29%);
   mask-image: radial-gradient(ellipse at center, #000 42%, transparent 78%);
   -webkit-mask-image: radial-gradient(ellipse at center, #000 42%, transparent 78%);
@@ -3499,31 +3469,27 @@ body:has(.seo-site) {
   left: 53%;
   width: 68%;
   height: 46px;
-  border: 1px solid rgba(70, 216, 255, 0.32);
+  border: 1px solid rgba(255, 86, 104, 0.58);
   border-radius: 50%;
   transform: translateX(-50%);
-  background: radial-gradient(ellipse, rgba(70, 216, 255, 0.07), transparent 68%);
-  box-shadow: inset 0 0 25px rgba(70, 216, 255, 0.04);
+  background: radial-gradient(ellipse, rgba(255, 64, 82, 0.09), transparent 68%);
+  box-shadow: inset 0 0 25px rgba(255, 64, 82, 0.08), 0 0 24px rgba(255, 64, 82, 0.06);
 }
 
 .focal-cone {
   position: absolute;
   top: calc(7% + 23px);
   left: 53%;
-  width: 35%;
+  width: 68%;
   height: 38%;
-  opacity: 0.56;
+  opacity: 0.68;
+  transform: translateX(-50%);
   transform-origin: top center;
-  background: linear-gradient(110deg, rgba(70, 216, 255, 0.02), rgba(188, 167, 255, 0.27), transparent 74%);
-  clip-path: polygon(0 0, 100% 0, 56% 100%, 44% 100%);
-}
-
-.focal-cone-left {
-  transform: translateX(-100%);
-}
-
-.focal-cone-right {
-  transform: scaleX(-1);
+  background:
+    linear-gradient(90deg, transparent 0%, rgba(255, 48, 70, 0.1) 14%, rgba(255, 72, 89, 0.32) 50%, rgba(255, 48, 70, 0.1) 86%, transparent 100%),
+    linear-gradient(rgba(255, 95, 111, 0.16), rgba(255, 42, 65, 0.32));
+  clip-path: polygon(0 0, 100% 0, 53.5% 100%, 46.5% 100%);
+  filter: drop-shadow(0 0 28px rgba(255, 45, 67, 0.14));
 }
 
 .focal-volume {
@@ -3533,11 +3499,11 @@ body:has(.seo-site) {
   left: 53%;
   width: 54px;
   height: 104px;
-  border: 1px solid rgba(244, 238, 255, 0.76);
+  border: 1px solid rgba(215, 200, 255, 0.92);
   border-radius: 50%;
   transform: translate(-50%, -50%);
-  background: radial-gradient(ellipse, #f7ecff 0 6%, #bca7ff 18%, rgba(139, 92, 255, 0.34) 50%, transparent 76%);
-  filter: drop-shadow(0 0 28px rgba(139, 92, 255, 0.94));
+  background: radial-gradient(ellipse, #d9ceff 0 6%, #9b70ff 18%, rgba(111, 52, 231, 0.68) 50%, rgba(74, 27, 163, 0.12) 76%);
+  filter: drop-shadow(0 0 32px rgba(126, 72, 255, 0.98));
   animation: atlas-focus 3.4s ease-in-out infinite;
 }
 
@@ -3549,8 +3515,8 @@ body:has(.seo-site) {
   height: 7px;
   border-radius: 50%;
   transform: translate(-50%, -50%);
-  background: #fff;
-  box-shadow: 0 0 12px #fff;
+  background: #d9ceff;
+  box-shadow: 0 0 14px #bca7ff;
 }
 
 .voxel-plane {
@@ -3594,7 +3560,7 @@ body:has(.seo-site) {
   letter-spacing: 0.17em;
 }
 
-.focal-label-light { top: 39%; right: 4%; }
+.focal-label-light { top: 39%; right: 4%; color: #9d5866; }
 .focal-label-matter { right: 6%; bottom: 20%; color: #927650; }
 
 .home-terms,

@@ -87,8 +87,7 @@ export default function HomePage() {
 
           <div className="focal-atlas" aria-label="Stylized two-photon focal volume and voxel field">
             <div className="focal-pupil" />
-            <div className="focal-cone focal-cone-left" />
-            <div className="focal-cone focal-cone-right" />
+            <div className="focal-cone" />
             <div className="focal-volume"><i /></div>
             <div className="voxel-plane">
               {Array.from({ length: 28 }).map((_, index) => (

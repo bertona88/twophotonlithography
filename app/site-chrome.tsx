@@ -14,11 +14,19 @@ export function JsonLd({ data }: { data: Record<string, unknown> | Record<string
 
 export function SiteMark() {
   return (
-    <span className="site-mark" aria-hidden="true">
-      <i />
-      <i />
-      <i />
-    </span>
+    <svg
+      className="site-mark"
+      viewBox="0 0 32 32"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect x="0.5" y="0.5" width="31" height="31" rx="8" fill="#08080f" stroke="#34213a" />
+      <path d="M4.5 5.5h23L17.4 20h-2.8L4.5 5.5Z" fill="#ff4052" fillOpacity="0.24" />
+      <path d="M8 6.5h16L17 19h-2L8 6.5Z" fill="#ff4052" fillOpacity="0.62" />
+      <path d="M5.5 5.5h21" stroke="#ff6877" strokeOpacity="0.9" />
+      <ellipse cx="16" cy="23" rx="2.75" ry="4.5" fill="#8b5cff" stroke="#c9b8ff" />
+      <ellipse cx="16" cy="23" rx="1" ry="2.2" fill="#d9ceff" />
+    </svg>
   );
 }
 
