@@ -24,6 +24,7 @@ type ModelParams = {
   repetitionRate: number;
   pulseDuration: number;
   wavelength: number;
+  piAbsorptionPeak: number;
   na: number;
   initiator: number;
   oxygen: number;

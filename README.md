@@ -195,7 +195,9 @@ a commercial photoresist.
 - Time is nondimensional, and parameters are not fitted to a particular resin.
 - The whole-volume optical kernel is a circular-polarization vectorial Debye
   integral normalized to fixed specimen power, with adaptively volume-averaged
-  two-photon `I²` weights cached for under-resolved focal cells. Thermal
+  two-photon `I²` weights cached for under-resolved focal cells. An adjustable
+  photoinitiator peak applies a normalized Gaussian spectral response with a
+  fixed 160 nm FWHM; it is not a fitted material spectrum. Thermal
   effects, shrinkage, stress, and experimentally calibrated development
   kinetics remain outside scope.
 - Developer ingress uses deterministic distance from bath-accessible specimen

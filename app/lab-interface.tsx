@@ -45,6 +45,7 @@ type ModelParams = {
   repetitionRate: number;
   pulseDuration: number;
   wavelength: number;
+  piAbsorptionPeak: number;
   na: number;
   initiator: number;
   oxygen: number;
@@ -159,6 +160,8 @@ type ParameterDefinition = {
   min: number;
   max: number;
   step: number;
+  hardMin?: number;
+  hardMax?: number;
   provenance?: "input" | "published" | "exploratory";
   log?: boolean;
 };
@@ -174,6 +177,7 @@ const DEFAULT_PARAMS: ModelParams = {
   repetitionRate: 80,
   pulseDuration: 100,
   wavelength: 780,
+  piAbsorptionPeak: 780,
   na: 1.4,
   initiator: 1,
   oxygen: 1,
@@ -239,9 +243,11 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         name: "Contour passes",
         symbol: "N꜀",
         unit: "",
-        min: 1,
-        max: 4,
+        min: 0,
+        max: 8,
         step: 1,
+        hardMin: 0,
+        hardMax: 64,
         provenance: "input",
       },
       {
@@ -261,9 +267,11 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         name: "Specimen power",
         symbol: "P",
         unit: "mW",
-        min: 6,
-        max: 32,
+        min: 0,
+        max: 150,
         step: 0.1,
+        hardMin: 0,
+        hardMax: 1_000,
         provenance: "input",
       },
       {
@@ -292,10 +300,20 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         name: "Wavelength",
         symbol: "λ",
         unit: "nm",
-        min: 720,
+        min: 500,
         max: 1064,
         step: 1,
         provenance: "input",
+      },
+      {
+        key: "piAbsorptionPeak",
+        name: "PI absorption peak",
+        symbol: "λₚᵢ",
+        unit: "nm",
+        min: 500,
+        max: 1064,
+        step: 1,
+        provenance: "exploratory",
       },
       {
         key: "pulseDuration",
@@ -324,9 +342,11 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         name: "Initial photoinitiator",
         symbol: "p₀",
         unit: "rel.",
-        min: 0.2,
-        max: 2,
+        min: 0,
+        max: 4,
         step: 0.01,
+        hardMin: 0,
+        hardMax: 32,
         provenance: "exploratory",
       },
       {
@@ -354,9 +374,11 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         name: "Radical yield",
         symbol: "η",
         unit: "rel.",
-        min: 0.1,
-        max: 3,
+        min: 0,
+        max: 6,
         step: 0.01,
+        hardMin: 0,
+        hardMax: 100,
         provenance: "exploratory",
       },
       {
@@ -394,9 +416,11 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         name: "Propagation",
         symbol: "γ",
         unit: "T₀⁻¹",
-        min: 0.05,
-        max: 2,
+        min: 0,
+        max: 4,
         step: 0.01,
+        hardMin: 0,
+        hardMax: 100,
         provenance: "exploratory",
       },
       {
@@ -434,9 +458,11 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         name: "Gel point",
         symbol: "xᵍ",
         unit: "conv.",
-        min: 0.1,
-        max: 0.7,
+        min: 0,
+        max: 0.95,
         step: 0.01,
+        hardMin: 0,
+        hardMax: 0.999,
         provenance: "exploratory",
       },
     ],
@@ -446,9 +472,11 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         name: "Base dissolution",
         symbol: "k₀",
         unit: "T₀⁻¹",
-        min: 0.1,
-        max: 4,
+        min: 0,
+        max: 8,
         step: 0.05,
+        hardMin: 0,
+        hardMax: 1_000,
         provenance: "exploratory",
       },
       {
@@ -456,9 +484,11 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         name: "Gel resistance",
         symbol: "aₖ",
         unit: "",
-        min: 1,
-        max: 16,
+        min: 0,
+        max: 32,
         step: 0.1,
+        hardMin: 0,
+        hardMax: 100,
         provenance: "exploratory",
       },
       {
@@ -466,9 +496,11 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         name: "Development time",
         symbol: "tᵈ",
         unit: "T₀",
-        min: 5,
-        max: 120,
+        min: 0,
+        max: 240,
         step: 1,
+        hardMin: 0,
+        hardMax: 1_000,
         provenance: "input",
       },
     ],
@@ -604,7 +636,7 @@ function ParamRow({
   const sliderValue = definition.log
     ? Math.log(boundedValue / definition.min) /
       Math.log(definition.max / definition.min)
-    : value;
+    : boundedValue;
 
   const handleSliderChange = (rawValue: number) => {
     if (!definition.log) {
@@ -653,8 +685,8 @@ function ParamRow({
           <input
             aria-label={`${definition.name} numeric value`}
             type="number"
-            min={definition.min}
-            max={definition.max}
+            min={definition.hardMin ?? definition.min}
+            max={definition.hardMax ?? definition.max}
             step={definition.step}
             value={value}
             disabled={disabled}

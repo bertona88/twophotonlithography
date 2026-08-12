@@ -284,7 +284,8 @@ export default function MethodPage() {
                 <div><span>Pulse energy</span><code>Eₚ = P / f</code></div>
                 <div><span>Peak-power proxy</span><code>P̂ = Eₚ / τ</code></div>
                 <div><span>Vector field</span><code>E(r) = Debye(NA, λ, polarization)</code></div>
-                <div><span>Local source</span><code>s(r) ∝ |E(r)|⁴ · P² / (f τ)</code></div>
+                <div><span>PI spectrum</span><code>A(λ) = exp[−4 ln 2 ((λ−λₚᵢ)/160 nm)²]</code></div>
+                <div><span>Local source</span><code>s(r) ∝ A(λ) · |E(r)|⁴ · P² / (f τ)</code></div>
               </div>
               <p>
                 The objective semi-angle is derived from NA and a fixed immersion
@@ -294,6 +295,13 @@ export default function MethodPage() {
                 pupil is normalized to fixed total power, so raising NA
                 concentrates the same specimen power instead of silently adding
                 energy.
+              </p>
+              <p>
+                Wavelength also changes initiation through an exploratory
+                Gaussian photoinitiator response. Its peak is adjustable and
+                its fixed 160 nm width is intentionally only a qualitative
+                stand-in until a measured two-photon absorption spectrum is
+                supplied for a named material.
               </p>
               <p>
                 Two-photon initiation follows the squared local intensity,

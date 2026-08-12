@@ -173,7 +173,7 @@ export default function HomePage() {
             <a href="/guides/parameters#oxygen"><span>o₀</span><strong>Oxygen</strong><small>A chemical brake</small></a>
           </div>
           <a className="text-action" href="/guides/parameters">
-            Understand all 26 parameters <span aria-hidden="true">↗</span>
+            Understand all 27 parameters <span aria-hidden="true">↗</span>
           </a>
         </section>
 

@@ -77,6 +77,7 @@ pub struct Parameters {
     pub repetition_rate: f64,
     pub pulse_duration: f64,
     pub wavelength: f64,
+    pub pi_absorption_peak: f64,
     pub na: f64,
     pub initiator: f64,
     pub oxygen: f64,
@@ -108,6 +109,7 @@ impl Default for Parameters {
             repetition_rate: 80.0,
             pulse_duration: 100.0,
             wavelength: 780.0,
+            pi_absorption_peak: 780.0,
             na: 1.4,
             initiator: 1.0,
             oxygen: 1.0,
@@ -161,6 +163,7 @@ impl Parameters {
         positive("repetitionRate", self.repetition_rate)?;
         positive("pulseDuration", self.pulse_duration)?;
         positive("wavelength", self.wavelength)?;
+        positive("piAbsorptionPeak", self.pi_absorption_peak)?;
         positive("na", self.na)?;
 
         nonnegative_f32("initiator", self.initiator)?;
@@ -208,7 +211,8 @@ impl Parameters {
             * (self.power / 16.0).powi(2)
             * (80.0 / self.repetition_rate)
             * (100.0 / self.pulse_duration)
-            * (45.0 / self.speed);
+            * (45.0 / self.speed)
+            * photoinitiator_absorption_factor(self.wavelength, self.pi_absorption_peak);
         let radical_source_bound = self.radical_yield * source_scale * self.initiator;
         let pi_sink_bound = self.pi_depletion * source_scale * self.initiator;
         let radical_loss_bound =
@@ -237,6 +241,15 @@ impl Parameters {
 
         Ok(())
     }
+}
+
+/// Exploratory two-photon absorption spectrum centered on the selected
+/// photoinitiator peak. The fixed width is broad and normalized to one at the
+/// peak; it is not a fitted spectrum for a named resin.
+pub(crate) fn photoinitiator_absorption_factor(wavelength_nm: f64, peak_wavelength_nm: f64) -> f64 {
+    const ABSORPTION_FWHM_NM: f64 = 160.0;
+    let offset = (wavelength_nm - peak_wavelength_nm) / ABSORPTION_FWHM_NM;
+    (-4.0 * std::f64::consts::LN_2 * offset * offset).exp()
 }
 
 fn validate_internal_substeps(label: &str, required: f64) -> Result<(), ValidationError> {
@@ -306,3 +319,19 @@ impl Display for ValidationError {
 }
 
 impl Error for ValidationError {}
+
+#[cfg(test)]
+mod tests {
+    use super::photoinitiator_absorption_factor;
+
+    #[test]
+    fn exploratory_absorption_spectrum_is_centered_and_has_declared_width() {
+        let peak = photoinitiator_absorption_factor(500.0, 500.0);
+        let lower_half = photoinitiator_absorption_factor(500.0, 580.0);
+        let upper_half = photoinitiator_absorption_factor(660.0, 580.0);
+
+        assert!((peak - 1.0).abs() < 1e-12);
+        assert!((lower_half - 0.5).abs() < 1e-12);
+        assert!((upper_half - 0.5).abs() < 1e-12);
+    }
+}

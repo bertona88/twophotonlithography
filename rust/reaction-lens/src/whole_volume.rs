@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
 
+use crate::parameters::photoinitiator_absorption_factor;
 use crate::{Parameters, ValidationError};
 
 const BASE_DIMS: [usize; 3] = [128, 72, 104];
@@ -501,7 +502,11 @@ impl WholeVolumeSimulation {
         let [fx, fy, fz] = index_to_ijk(focus_index, self.dims);
         let pulse_factor = (self.parameters.power / 16.0).powi(2)
             * (80.0 / self.parameters.repetition_rate)
-            * (100.0 / self.parameters.pulse_duration);
+            * (100.0 / self.parameters.pulse_duration)
+            * photoinitiator_absorption_factor(
+                self.parameters.wavelength,
+                self.parameters.pi_absorption_peak,
+            );
         let dose_scale = (pulse_factor * dt * TWO_PHOTON_DOSE_RATE).clamp(0.0, f32::MAX as f64);
         for kernel_index in 0..self.psf_kernel.len() {
             let kernel = &self.psf_kernel[kernel_index];
@@ -2160,11 +2165,14 @@ mod tests {
     fn psf_preview_tracks_na_and_wavelength_from_the_debye_kernel() {
         let lower_na = preview_vectorial_psf(0.9, 780.0, 64 * 1024 * 1024).unwrap();
         let higher_na = preview_vectorial_psf(1.4, 780.0, 64 * 1024 * 1024).unwrap();
+        let shorter_wavelength = preview_vectorial_psf(1.4, 500.0, 64 * 1024 * 1024).unwrap();
         let longer_wavelength = preview_vectorial_psf(1.4, 1_064.0, 64 * 1024 * 1024).unwrap();
 
         assert!(higher_na.cone_half_angle_rad > lower_na.cone_half_angle_rad);
         assert!(higher_na.fwhm_radii_um[0] < lower_na.fwhm_radii_um[0]);
         assert!(higher_na.fwhm_radii_um[2] < lower_na.fwhm_radii_um[2]);
+        assert!(shorter_wavelength.fwhm_radii_um[0] < higher_na.fwhm_radii_um[0]);
+        assert!(shorter_wavelength.fwhm_radii_um[2] < higher_na.fwhm_radii_um[2]);
         assert!(longer_wavelength.fwhm_radii_um[0] > higher_na.fwhm_radii_um[0]);
         assert!(longer_wavelength.fwhm_radii_um[2] > higher_na.fwhm_radii_um[2]);
         assert!(higher_na

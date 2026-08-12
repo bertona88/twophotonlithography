@@ -47,7 +47,7 @@ const guides = [
     title: "Parameter atlas",
     subtitle: "Every control, intuitively",
     description:
-      "Trace all 26 path, light, resin, and development parameters through their expected effects, interactions, and model boundaries.",
+      "Trace all 27 path, light, resin, and development parameters through their expected effects, interactions, and model boundaries.",
     href: "/guides/parameters",
   },
   {

@@ -19,6 +19,7 @@ const parameters = {
   repetitionRate: 80,
   pulseDuration: 100,
   wavelength: 780,
+  piAbsorptionPeak: 780,
   na: 1.4,
   initiator: 1,
   oxygen: 1,

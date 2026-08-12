@@ -1,6 +1,9 @@
 use serde::Serialize;
 
-use crate::parameters::{Parameters, SimulationConfig, ValidationError, MAX_EXPOSURE_STEPS_TOTAL};
+use crate::parameters::{
+    photoinitiator_absorption_factor, Parameters, SimulationConfig, ValidationError,
+    MAX_EXPOSURE_STEPS_TOTAL,
+};
 
 pub const GRID_WIDTH: usize = 112;
 pub const GRID_HEIGHT: usize = 68;
@@ -54,6 +57,7 @@ pub(crate) fn exposure_required_substeps(parameters: &Parameters, source_multipl
         * (80.0 / parameters.repetition_rate)
         * (100.0 / parameters.pulse_duration)
         * (45.0 / parameters.speed)
+        * photoinitiator_absorption_factor(parameters.wavelength, parameters.pi_absorption_peak)
         * source_multiplier;
 
     let pi_removal = 2.0 * exposure_diffusion_courant(parameters.pi_diffusion)
@@ -470,6 +474,10 @@ impl Simulation {
             * (80.0 / parameters.repetition_rate)
             * (100.0 / parameters.pulse_duration)
             * (45.0 / parameters.speed)
+            * photoinitiator_absorption_factor(
+                parameters.wavelength,
+                parameters.pi_absorption_peak,
+            )
             * source_multiplier;
 
         for (radial_squared, x_position) in self

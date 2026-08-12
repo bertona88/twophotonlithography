@@ -64,9 +64,10 @@ test("renders all parameter families and their evidence boundaries", async () =>
   const html = await response.text();
 
   for (const pattern of [
-    /26 live controls/,
+    /27 live controls/,
     /Layer height/,
     /Specimen power/,
+    /PI absorption peak/,
     /Numerical aperture/,
     /Boundary oxygen/,
     /Bimolecular termination/,
