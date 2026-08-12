@@ -28,6 +28,10 @@ test("renders a search-focused homepage with canonical and social metadata", asy
   assert.match(html, /class="focal-cone"/);
   assert.doesNotMatch(html, /focal-cone-(?:left|right)/);
   assert.match(html, /class="site-mark"/);
+  assert.match(
+    html,
+    /<a(?=[^>]*href="https:\/\/github\.com\/bertona88\/twophotonlithography")(?=[^>]*target="_blank")(?=[^>]*rel="noreferrer")[^>]*>\s*View source on GitHub/,
+  );
   assert.match(html, /rel="canonical" href="https:\/\/twophotonlithography\.com\/"/);
   assert.match(html, /property="og:image" content="https:\/\/twophotonlithography\.com\/og\.png"/);
   assert.match(html, /"@type":"WebApplication"/);

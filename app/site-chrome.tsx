@@ -69,6 +69,13 @@ export function SiteFooter() {
         <a href="/guides/parameters">Parameters</a>
         <a href="/guides/model-space">Model space</a>
         <a href="/method">References</a>
+        <a
+          href="https://github.com/bertona88/twophotonlithography"
+          target="_blank"
+          rel="noreferrer"
+        >
+          View source on GitHub <span aria-hidden="true">↗</span>
+        </a>
       </nav>
     </footer>
   );
