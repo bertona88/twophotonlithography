@@ -10,6 +10,7 @@ import {
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import type { FieldMode, PsfPreview } from "./lab-viewport";
+import { shouldRunComparison } from "./comparison-mode";
 import { shouldIgnoreLabShortcut } from "./keyboard-shortcuts";
 import {
   isLayerInspectionLocked,
@@ -976,6 +977,13 @@ export default function LabInterface() {
     const applyLayout = (matches: boolean, initial = false) => {
       setIsMobileLayout(matches);
       setMobileLensOpen(false);
+      if (matches) {
+        variantRunningRef.current = false;
+        setBaseline(null);
+        setVariant(null);
+        setComparisonView("B");
+        setStage((current) => (current === "compare" ? "complete" : current));
+      }
       if (initial) {
         setPanelOpen(!matches);
       } else if (matches || previousMatch !== matches) {
@@ -1324,7 +1332,16 @@ export default function LabInterface() {
     setStage("ready");
   }, [params]);
 
+  const clearComparison = useCallback(() => {
+    variantRunningRef.current = false;
+    setBaseline(null);
+    setVariant(null);
+    setComparisonView("B");
+    setStage((current) => (current === "compare" ? "complete" : current));
+  }, []);
+
   const runComparison = useCallback(() => {
+    if (isMobileLayout) return;
     const completedRun = completedRunRef.current;
     if (!completedRun) return;
     const changes = parameterChanges(completedRun.params, params);
@@ -1351,11 +1368,11 @@ export default function LabInterface() {
     }
     workerRef.current?.postMessage({ type: "start" });
     setNotice(`Branch B is replaying with ${describeParameterChanges(changes)}.`);
-  }, [params]);
+  }, [isMobileLayout, params]);
 
   const primaryAction = useCallback(() => {
     if (solverState !== "ready") return;
-    if (dirty && (stage === "complete" || stage === "compare")) {
+    if (shouldRunComparison(dirty, stage, isMobileLayout)) {
       runComparison();
       return;
     }
@@ -1392,11 +1409,19 @@ export default function LabInterface() {
     }
     if (stage === "complete") {
       setPanelOpen(true);
-      setNotice("Change any parameter to create an A/B comparison.");
+      setNotice(
+        isMobileLayout
+          ? "Adjust parameters to start a fresh run."
+          : "Change any parameter to create an A/B comparison.",
+      );
       return;
     }
     if (stage === "compare") {
-      setComparisonView((value) => (value === "A" ? "B" : "A"));
+      if (isMobileLayout) {
+        clearComparison();
+      } else {
+        setComparisonView((value) => (value === "A" ? "B" : "A"));
+      }
     }
   }, [
     dirty,
@@ -1407,12 +1432,14 @@ export default function LabInterface() {
     params,
     runComparison,
     solverState,
+    isMobileLayout,
+    clearComparison,
   ]);
 
   const primaryLabel = useMemo(() => {
     if (solverState === "initializing") return "Loading Rust solver…";
     if (solverState === "error") return "Solver unavailable";
-    if (dirty && (stage === "complete" || stage === "compare")) {
+    if (shouldRunComparison(dirty, stage, isMobileLayout)) {
       return "Run A/B comparison";
     }
     if (dirty === "slice") return "Apply & reslice";
@@ -1424,9 +1451,21 @@ export default function LabInterface() {
     if (stage === "paused" && exposureProgress < 0.999) return "Resume exposure";
     if (stage === "paused") return "Admit developer";
     if (stage === "developing") return "Developing…";
-    if (stage === "complete") return "Change a parameter to compare";
+    if (stage === "complete") {
+      return isMobileLayout
+        ? "Adjust parameters"
+        : "Change a parameter to compare";
+    }
+    if (stage === "compare" && isMobileLayout) return "Continue with run B";
     return `Show run ${comparisonView === "A" ? "B" : "A"}`;
-  }, [dirty, stage, exposureProgress, comparisonView, solverState]);
+  }, [
+    dirty,
+    stage,
+    exposureProgress,
+    comparisonView,
+    solverState,
+    isMobileLayout,
+  ]);
 
   const selectedRun = useMemo(() => {
     if (stage === "compare" && comparisonView === "A" && baseline) {
@@ -1870,21 +1909,34 @@ export default function LabInterface() {
                   : `${comparisonChanges.length} parameters · deterministic replay`}
               </strong>
             </div>
-            <div className="ab-toggle">
+            <div className="comparison-actions">
+              <div className="ab-toggle" aria-label="Displayed comparison run">
+                <button
+                  className={comparisonView === "A" ? "active" : ""}
+                  onClick={() => setComparisonView("A")}
+                  type="button"
+                >
+                  A
+                </button>
+                <button
+                  className={comparisonView === "B" ? "active" : ""}
+                  onClick={() => setComparisonView("B")}
+                  type="button"
+                  disabled={!variant}
+                >
+                  B
+                </button>
+              </div>
               <button
-                className={comparisonView === "A" ? "active" : ""}
-                onClick={() => setComparisonView("A")}
+                className="comparison-dismiss"
+                onClick={() => {
+                  clearComparison();
+                  setNotice("Comparison closed. The current run remains active.");
+                }}
                 type="button"
+                aria-label="Close comparison"
               >
-                A
-              </button>
-              <button
-                className={comparisonView === "B" ? "active" : ""}
-                onClick={() => setComparisonView("B")}
-                type="button"
-                disabled={!variant}
-              >
-                B
+                ×
               </button>
             </div>
           </div>
@@ -1920,7 +1972,10 @@ export default function LabInterface() {
         </section>
       )}
 
-      <section className="causal-tape glass-panel" aria-label="Process state">
+      <section
+        className={`causal-tape glass-panel ${sliceInfo ? "has-slices" : ""}`}
+        aria-label="Process state"
+      >
         <div className="tape-topline">
           <div className="tape-identity">
             <span className="eyebrow">Process state</span>
@@ -1954,17 +2009,46 @@ export default function LabInterface() {
                   Section cut
                 </button>
               </div>
-              <input
-                id="inspection-layer"
-                aria-label="Inspected layer"
-                type="range"
-                min={0}
-                max={Math.max(0, sliceInfo.layerCount - 1)}
-                value={selectedLayer}
-                disabled={layerInspectionLocked}
-                aria-describedby="layer-mode-status"
-                onChange={(event) => setSelectedLayer(Number(event.target.value))}
-              />
+              <div className="layer-scrubber-control">
+                <button
+                  className="mobile-layer-step"
+                  type="button"
+                  aria-label="Previous layer"
+                  disabled={layerInspectionLocked || selectedLayer <= 0}
+                  onClick={() =>
+                    setSelectedLayer((value) => Math.max(0, value - 1))
+                  }
+                >
+                  ‹
+                </button>
+                <input
+                  id="inspection-layer"
+                  aria-label="Inspected layer"
+                  type="range"
+                  min={0}
+                  max={Math.max(0, sliceInfo.layerCount - 1)}
+                  value={selectedLayer}
+                  disabled={layerInspectionLocked}
+                  aria-describedby="layer-mode-status"
+                  onChange={(event) => setSelectedLayer(Number(event.target.value))}
+                />
+                <button
+                  className="mobile-layer-step"
+                  type="button"
+                  aria-label="Next layer"
+                  disabled={
+                    layerInspectionLocked ||
+                    selectedLayer >= sliceInfo.layerCount - 1
+                  }
+                  onClick={() =>
+                    setSelectedLayer((value) =>
+                      Math.min(sliceInfo.layerCount - 1, value + 1),
+                    )
+                  }
+                >
+                  ›
+                </button>
+              </div>
             </div>
           )}
           <div className="integrity-readout">
