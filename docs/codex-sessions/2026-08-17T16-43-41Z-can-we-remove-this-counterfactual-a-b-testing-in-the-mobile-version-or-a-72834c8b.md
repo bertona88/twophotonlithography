@@ -2,13 +2,13 @@
 
 ## Metadata
 
-- Captured at: `2026-08-17T17:04:10Z`
+- Captured at: `2026-08-17T17:23:08Z`
 - Session id: `01a0109b-80d7-7730-9c19-260b72834c8b`
 - Session started: `2026-08-17T16:43:41.684Z`
 - Source file: `rollout-2026-08-17T18-43-41-01a0109b-80d7-7730-9c19-260b72834c8b.jsonl`
-- Source SHA-256: `9977f463a5a77fd35b5b98c9edf8c7a9c8e6773bd52e639b87454a72d1905a07`
+- Source SHA-256: `d41d4fe3e99aa65285b05bc15b6c35b8a1ef9e0ca90ab5fbb2becbcaba255cef`
 - Repository match: `yes`
-- Selection anchor: `codex-session-anchor: 20260817T170350Z-d29b2530`
+- Selection anchor: `codex-session-anchor: 20260817T172244Z-f4a033c5`
 - Anchor match: `yes`
 
 > Exported by the commit-chat-push skill. Developer/system instructions, encrypted reasoning, token counts, and oversized raw logs are intentionally omitted.
@@ -115,6 +115,96 @@ The release audit found one small but important packaging gap: the new mobile co
 
 ```text
 Pre-release state is healthy: GitHub `main`, the immutable live symlink, and the running service all resolve to the same existing revision `f996293…`; the timer is active, apex `/lab` is 200, and `www` redirects correctly. The exact patched tree passes TypeScript, lint, provenance checks, renderer tests, and 20 focused tests. I’m exporting and privacy-scanning this task’s transcript now, then I’ll stage only the five source/test files plus that transcript—leaving the unrelated deleted plugin out of the commit.
+```
+
+### Assistant (commentary) - 2026-08-17T17:05:40.359Z
+
+```text
+The release commit is currently finishing. I’m waiting for that exact operation to terminate before pushing, then I’ll follow the deployed SHA all the way through the Hetzner service and public `/lab` assets.
+```
+
+### Assistant (commentary) - 2026-08-17T17:05:46.840Z
+
+```text
+The commit completed cleanly as `97cd5d6`, containing exactly the six intended files, including the provenance transcript. I’m confirming the worktree boundary now—especially that the unrelated local deletion stayed outside the commit—then I’ll push `main`.
+```
+
+### Assistant (commentary) - 2026-08-17T17:06:03.867Z
+
+```text
+GitHub `main` now resolves exactly to `97cd5d67e6f1eab9aad3a4141642f167be2d274a`. The unrelated `build/sites-vite-plugin.ts` deletion is still local and uncommitted, as intended. I’m on the production leg now: waiting for the deploy unit’s full test gate, revision switch, and public readback.
+```
+
+### Assistant (commentary) - 2026-08-17T17:06:19.608Z
+
+```text
+The three-minute timer checked just before the push and would otherwise wait another couple of minutes. Since you explicitly asked to ship, I’m triggering the existing production deploy service now through its normal pipeline; this still runs the repository’s full test suite before it can switch the live symlink.
+```
+
+### Assistant (commentary) - 2026-08-17T17:06:40.402Z
+
+```text
+Production picked up the exact commit and is building `97cd5d67…`; dependency integrity preflight passed and the bounded clean install is running. The live revision has not switched yet, which is correct while the gate is still active.
+```
+
+### Assistant (commentary) - 2026-08-17T17:07:29.722Z
+
+```text
+The production gate has now passed the frontend renderer tests, all nine control/provenance tests—including the two new mobile/desktop comparison-path tests—and Rust formatting/clippy. The 41-test authoritative simulation suite is still completing; the live symlink remains on the old version until it finishes.
+```
+
+### Assistant (commentary) - 2026-08-17T17:08:41.626Z
+
+```text
+Thirty-eight of the 41 Rust tests have reported `ok`. The remaining full-benchy exposure test is the intentionally heavy integration case and has crossed Rust’s 60-second “still running” notice; no failure has occurred, and production has correctly not switched yet.
+```
+
+### Assistant (commentary) - 2026-08-17T17:09:38.307Z
+
+```text
+The heavy test is healthy, not hung: its test process is actively using CPU (about 130%) with ample memory available. I’m letting the gate finish naturally rather than bypassing or killing it.
+```
+
+### Assistant (commentary) - 2026-08-17T17:10:38.876Z
+
+```text
+The authoritative Rust suite passed all 41 tests, including the full-volume Benchy case. The verified production build is now compiling the pinned Wasm (`wasm-pack 0.13.1`) and Vinext client/server artifacts; the switch still waits on build and health checks.
+```
+
+### Assistant (commentary) - 2026-08-17T17:11:37.756Z
+
+```text
+Production’s complete gate passed: Wasm off-main-thread replay, browser worker contract, persistent-failure handling, and all five rendered-route tests. The service tolerated its initial startup retry and then reported the exact SHA deployed. I’m doing the immutable proof now—state file, symlink, service/timer, canonical/redirect responses, and hashes of the served client, worker, and Wasm assets.
+```
+
+### Assistant (commentary) - 2026-08-17T17:12:26.052Z
+
+```text
+The live revision, symlink, app service, and deploy timer all now agree on `97cd5d67…`. Public `/lab` is 200 and `www` redirects to the apex. The public CSS, lab bundle, viewport bundle, simulation worker, and Wasm are byte-for-byte identical to that immutable release, and the served bundle contains the new mobile layer controls and reset behavior. I’m doing one final live mobile interaction pass before closing the release.
+```
+
+### Assistant (commentary) - 2026-08-17T17:15:42.804Z
+
+```text
+The live phone viewport is behaving correctly: 390×844 is active; the bottom layer controls are 40×40 px; Previous moved the slice from layer 17 to 16; all four chemistry fields remain present; and the 563 px drawer scrolls through 1,198 px of content with native vertical touch panning. I’m now replaying the exact post-completion parameter-edit case on production.
+```
+
+### Assistant (commentary) - 2026-08-17T17:18:56.790Z
+
+```text
+The live replay exposed one last production-only interaction collision: the persistent “Adjust parameters…” notice sits directly on top of the four field buttons at phone width. The underlying controls are present, but the notice intercepts them. I’m fixing that overlap now and will run the same commit/deploy/readback cycle again; I’m not calling this shipped while that obstruction remains.
+```
+
+### Assistant (commentary) - 2026-08-17T17:22:12.111Z
+
+```text
+The corrected mobile layout now gives the notice its own row immediately below the field selector—the rectangles meet at 118 px with zero overlap. In a full local run, oxygen and remaining-mass switching both worked while the notice was present; applying the edit returned to Path ready, kept the slicer enabled, and showed no A/B comparison. I’m validating and committing this final CSS correction, then production gets one more gated deploy.
+```
+
+### Assistant (commentary) - 2026-08-17T17:22:42.049Z
+
+```text
+The CSS correction itself is verified in the phone-sized app. Because the original QA worktree predates a later harmless CSS reordering, I’m rebuilding a fresh isolated validation tree from the pushed commit plus this one-line layout fix, so the checks cover the exact bytes I’ll commit. I’m also refreshing the committed provenance transcript to include this caught-and-fixed production interaction.
 ```
 
 ## Implementation Activity

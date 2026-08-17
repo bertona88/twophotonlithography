@@ -2440,9 +2440,16 @@ input:focus-visible {
     bottom: calc(192px + var(--safe-bottom));
   }
 
+  .solver-alert {
+    top: calc(64px + var(--safe-top));
+  }
+
+  .toast {
+    top: calc(118px + var(--safe-top));
+  }
+
   .solver-alert,
   .toast {
-    top: calc(64px + var(--safe-top));
     width: calc(
       100vw - 20px - var(--safe-left) - var(--safe-right)
     );
