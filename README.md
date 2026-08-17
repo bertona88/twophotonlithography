@@ -223,6 +223,19 @@ experimental calibration against a named resin/process dataset**.
 - `worker/index.ts` — deployable Cloudflare Worker entry
 - `tests/` — worker initialization, build-artifact, and rendered-output checks
 
+## License and provenance
+
+This software is licensed under the
+[WOFI Software License 1.0](LICENSE). It is registered as an Implementation of
+the WOFI Idea
+[Browser-based two-photon lithography process simulator](https://wofi.ai/ideas/sha256%3A182f6bf27b400b724d6e77e5a7d10d1d402dede3b5dbcaebb979a897bf74ad2e).
+The repository-specific Idea and Implementation lineage is recorded in
+[`wofi.json`](wofi.json).
+
+The deployed application carries the same artifacts at
+[`/LICENSE.txt`](https://twophotonlithography.com/LICENSE.txt) and
+[`/wofi.json`](https://twophotonlithography.com/wofi.json).
+
 ## Production deployment
 
 Pushes to `main` are deployed automatically to the existing Hetzner VPS. The

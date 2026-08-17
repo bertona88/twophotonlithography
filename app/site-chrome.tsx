@@ -70,6 +70,15 @@ export function SiteFooter() {
         <a href="/guides/model-space">Model space</a>
         <a href="/method">References</a>
         <a
+          href="https://wofi.ai/ideas/sha256%3A182f6bf27b400b724d6e77e5a7d10d1d402dede3b5dbcaebb979a897bf74ad2e"
+          target="_blank"
+          rel="noreferrer"
+        >
+          WOFI Idea <span aria-hidden="true">↗</span>
+        </a>
+        <a href="/wofi.json">Provenance</a>
+        <a href="/LICENSE.txt">License</a>
+        <a
           href="https://github.com/bertona88/twophotonlithography"
           target="_blank"
           rel="noreferrer"

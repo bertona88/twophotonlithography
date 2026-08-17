@@ -32,6 +32,12 @@ test("renders a search-focused homepage with canonical and social metadata", asy
     html,
     /<a(?=[^>]*href="https:\/\/github\.com\/bertona88\/twophotonlithography")(?=[^>]*target="_blank")(?=[^>]*rel="noreferrer")[^>]*>\s*View source on GitHub/,
   );
+  assert.match(
+    html,
+    /<a(?=[^>]*href="https:\/\/wofi\.ai\/ideas\/sha256%3A182f6bf27b400b724d6e77e5a7d10d1d402dede3b5dbcaebb979a897bf74ad2e")(?=[^>]*target="_blank")(?=[^>]*rel="noreferrer")[^>]*>\s*WOFI Idea/,
+  );
+  assert.match(html, /href="\/wofi\.json">Provenance<\/a>/);
+  assert.match(html, /href="\/LICENSE\.txt">License<\/a>/);
   assert.match(html, /rel="canonical" href="https:\/\/twophotonlithography\.com\/"/);
   assert.match(html, /property="og:image" content="https:\/\/twophotonlithography\.com\/og\.png"/);
   assert.match(html, /"@type":"WebApplication"/);
