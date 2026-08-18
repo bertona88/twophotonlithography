@@ -727,32 +727,18 @@ function FieldSelector({
   );
 }
 
-function ReactionLens({
+function ReactionLensCanvas({
   pixels,
   width,
   height,
-  sliceZUm,
   fieldMode,
-  mobileOpen,
-  onMobileClose,
-  metrics,
-  solverState,
-  volumeDiagnostics,
-  wasmMemoryBytes,
-  updatesPerSecond,
+  className = "",
 }: {
   pixels: Uint8Array | null;
   width: number;
   height: number;
-  sliceZUm: number;
   fieldMode: FieldMode;
-  mobileOpen: boolean;
-  onMobileClose: () => void;
-  metrics: SliceMetrics;
-  solverState: SolverState;
-  volumeDiagnostics: VolumeDiagnostics | null;
-  wasmMemoryBytes: number;
-  updatesPerSecond: number;
+  className?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -810,6 +796,43 @@ function ReactionLens({
   }, [pixels, width, height, fieldMode]);
 
   return (
+    <div className={`lens-canvas-wrap ${className}`.trim()}>
+      <canvas ref={canvasRef} className="lens-canvas" />
+      <div className="lens-reticle" aria-hidden="true" />
+      <span className="axis axis-x">X</span>
+      <span className="axis axis-z">Y</span>
+    </div>
+  );
+}
+
+function ReactionLens({
+  pixels,
+  width,
+  height,
+  sliceZUm,
+  fieldMode,
+  mobileOpen,
+  onMobileClose,
+  metrics,
+  solverState,
+  volumeDiagnostics,
+  wasmMemoryBytes,
+  updatesPerSecond,
+}: {
+  pixels: Uint8Array | null;
+  width: number;
+  height: number;
+  sliceZUm: number;
+  fieldMode: FieldMode;
+  mobileOpen: boolean;
+  onMobileClose: () => void;
+  metrics: SliceMetrics;
+  solverState: SolverState;
+  volumeDiagnostics: VolumeDiagnostics | null;
+  wasmMemoryBytes: number;
+  updatesPerSecond: number;
+}) {
+  return (
     <section
       className={`reaction-lens glass-panel ${mobileOpen ? "mobile-open" : ""}`}
       id="reaction-lens-panel"
@@ -836,12 +859,12 @@ function ReactionLens({
           ×
         </button>
       </div>
-      <div className="lens-canvas-wrap">
-        <canvas ref={canvasRef} className="lens-canvas" />
-        <div className="lens-reticle" aria-hidden="true" />
-        <span className="axis axis-x">X</span>
-        <span className="axis axis-z">Y</span>
-      </div>
+      <ReactionLensCanvas
+        pixels={pixels}
+        width={width}
+        height={height}
+        fieldMode={fieldMode}
+      />
       <div className="lens-readouts">
         <span>
           O₂ <strong>{(metrics.oxygenMean * 100).toFixed(1)}%</strong>
@@ -880,6 +903,95 @@ function ReactionLens({
         </span>
       </div>
     </section>
+  );
+}
+
+function LayerScrubber({
+  className = "",
+  inputId,
+  sliceInfo,
+  selectedLayer,
+  selectedLayerZ,
+  layerModeStatus,
+  following,
+  locked,
+  sectionCutEnabled,
+  onLayerChange,
+  onSectionCutToggle,
+}: {
+  className?: string;
+  inputId: string;
+  sliceInfo: SliceInfo;
+  selectedLayer: number;
+  selectedLayerZ: number;
+  layerModeStatus: string;
+  following: boolean;
+  locked: boolean;
+  sectionCutEnabled: boolean;
+  onLayerChange: (layer: number) => void;
+  onSectionCutToggle: () => void;
+}) {
+  const statusId = `${inputId}-mode`;
+
+  return (
+    <div className={`layer-scrubber ${className}`.trim()}>
+      <div className="layer-scrubber-heading">
+        <label htmlFor={inputId}>
+          Layer{" "}
+          <strong>
+            {selectedLayer + 1}/{sliceInfo.layerCount} · z{" "}
+            {formatNumber(selectedLayerZ, 2)} µm
+          </strong>
+        </label>
+        <span
+          className={`layer-mode ${following ? "following" : ""}`}
+          id={statusId}
+        >
+          {layerModeStatus}
+        </span>
+        <button
+          className={sectionCutEnabled ? "active" : ""}
+          type="button"
+          aria-pressed={sectionCutEnabled}
+          onClick={onSectionCutToggle}
+        >
+          Section cut
+        </button>
+      </div>
+      <div className="layer-scrubber-control">
+        <button
+          className="mobile-layer-step"
+          type="button"
+          aria-label="Previous layer"
+          disabled={locked || selectedLayer <= 0}
+          onClick={() => onLayerChange(Math.max(0, selectedLayer - 1))}
+        >
+          ‹
+        </button>
+        <input
+          id={inputId}
+          aria-label="Inspected layer"
+          type="range"
+          min={0}
+          max={Math.max(0, sliceInfo.layerCount - 1)}
+          value={selectedLayer}
+          disabled={locked}
+          aria-describedby={statusId}
+          onChange={(event) => onLayerChange(Number(event.target.value))}
+        />
+        <button
+          className="mobile-layer-step"
+          type="button"
+          aria-label="Next layer"
+          disabled={locked || selectedLayer >= sliceInfo.layerCount - 1}
+          onClick={() =>
+            onLayerChange(Math.min(sliceInfo.layerCount - 1, selectedLayer + 1))
+          }
+        >
+          ›
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1649,38 +1761,8 @@ export default function LabInterface() {
         )}
       </section>
 
-      <nav className="mobile-quick-tools" aria-label="Lab tools">
-        <button
-          ref={lensTriggerRef}
-          className={mobileLensOpen ? "active" : ""}
-          onClick={() => {
-            setPanelOpen(false);
-            setMobileLensOpen((value) => !value);
-          }}
-          type="button"
-          aria-controls="reaction-lens-panel"
-          aria-expanded={mobileLensOpen}
-        >
-          <span aria-hidden="true">⌗</span>
-          Reaction Lens
-        </button>
-        <button
-          className={panelOpen ? "active" : ""}
-          onClick={() => {
-            setMobileLensOpen(false);
-            setPanelOpen(true);
-          }}
-          type="button"
-          aria-controls="parameter-sheet"
-          aria-expanded={panelOpen}
-        >
-          <span aria-hidden="true">⌁</span>
-          Parameters
-        </button>
-      </nav>
-
       <ReactionLens
-        pixels={displaySlicePixels}
+        pixels={isMobileLayout && !mobileLensOpen ? null : displaySlicePixels}
         width={displaySliceWidth}
         height={displaySliceHeight}
         sliceZUm={displaySliceZUm}
@@ -1985,71 +2067,20 @@ export default function LabInterface() {
             </strong>
           </div>
           {sliceInfo && (
-            <div className="layer-scrubber">
-              <div className="layer-scrubber-heading">
-                <label htmlFor="inspection-layer">
-                  Layer{" "}
-                  <strong>
-                    {selectedLayer + 1}/{sliceInfo.layerCount} · z{" "}
-                    {formatNumber(selectedLayerZ, 2)} µm
-                  </strong>
-                </label>
-                <span
-                  className={`layer-mode ${stage === "exposing" ? "following" : ""}`}
-                  id="layer-mode-status"
-                >
-                  {layerModeStatus}
-                </span>
-                <button
-                  className={sectionCutEnabled ? "active" : ""}
-                  type="button"
-                  aria-pressed={sectionCutEnabled}
-                  onClick={() => setSectionCutEnabled((value) => !value)}
-                >
-                  Section cut
-                </button>
-              </div>
-              <div className="layer-scrubber-control">
-                <button
-                  className="mobile-layer-step"
-                  type="button"
-                  aria-label="Previous layer"
-                  disabled={layerInspectionLocked || selectedLayer <= 0}
-                  onClick={() =>
-                    setSelectedLayer((value) => Math.max(0, value - 1))
-                  }
-                >
-                  ‹
-                </button>
-                <input
-                  id="inspection-layer"
-                  aria-label="Inspected layer"
-                  type="range"
-                  min={0}
-                  max={Math.max(0, sliceInfo.layerCount - 1)}
-                  value={selectedLayer}
-                  disabled={layerInspectionLocked}
-                  aria-describedby="layer-mode-status"
-                  onChange={(event) => setSelectedLayer(Number(event.target.value))}
-                />
-                <button
-                  className="mobile-layer-step"
-                  type="button"
-                  aria-label="Next layer"
-                  disabled={
-                    layerInspectionLocked ||
-                    selectedLayer >= sliceInfo.layerCount - 1
-                  }
-                  onClick={() =>
-                    setSelectedLayer((value) =>
-                      Math.min(sliceInfo.layerCount - 1, value + 1),
-                    )
-                  }
-                >
-                  ›
-                </button>
-              </div>
-            </div>
+            <LayerScrubber
+              inputId="inspection-layer"
+              sliceInfo={sliceInfo}
+              selectedLayer={selectedLayer}
+              selectedLayerZ={selectedLayerZ}
+              layerModeStatus={layerModeStatus}
+              following={stage === "exposing"}
+              locked={layerInspectionLocked}
+              sectionCutEnabled={sectionCutEnabled}
+              onLayerChange={setSelectedLayer}
+              onSectionCutToggle={() =>
+                setSectionCutEnabled((value) => !value)
+              }
+            />
           )}
           <div className="integrity-readout">
             <span>
@@ -2071,27 +2102,100 @@ export default function LabInterface() {
         </div>
       </section>
 
-      <section className="mobile-run-status glass-panel" aria-label="Simulation status">
-        <div>
-          <span className="mobile-stage-index" aria-hidden="true">
-            {String(activeProcess + 1).padStart(2, "0")}
-          </span>
-          <span>
-            <small>Current stage</small>
-            <strong>{stageLabel(stage, exposureProgress)}</strong>
-          </span>
-          <output>{Math.round(overallProgress * 100)}%</output>
+      <section
+        className={`mobile-inspection-dock glass-panel ${
+          sliceInfo ? "has-slices" : ""
+        }`}
+        aria-label="Reaction layer and simulation status"
+      >
+        <div className="mobile-inspection-summary">
+          <button
+            ref={lensTriggerRef}
+            className="mobile-lens-preview"
+            onClick={() => {
+              setPanelOpen(false);
+              setMobileLensOpen(true);
+            }}
+            type="button"
+            aria-controls="reaction-lens-panel"
+            aria-expanded={mobileLensOpen}
+            aria-label="Expand Reaction Lens"
+          >
+            <span>
+              <i aria-hidden="true" />
+              Reaction Lens
+            </span>
+            <strong>
+              {FIELD_LABELS[fieldMode].label} · z{" "}
+              {formatNumber(displaySliceZUm, 2)} µm
+            </strong>
+            <ReactionLensCanvas
+              pixels={isMobileLayout ? displaySlicePixels : null}
+              width={displaySliceWidth}
+              height={displaySliceHeight}
+              fieldMode={fieldMode}
+              className="mobile-lens-canvas"
+            />
+          </button>
+
+          <div className="mobile-stage-summary">
+            <div className="mobile-stage-heading">
+              <span className="mobile-stage-index" aria-hidden="true">
+                {String(activeProcess + 1).padStart(2, "0")}
+              </span>
+              <span>
+                <small>Current stage</small>
+                <strong>{stageLabel(stage, exposureProgress)}</strong>
+              </span>
+              <output>{Math.round(overallProgress * 100)}%</output>
+            </div>
+            <div
+              className="mobile-run-progress"
+              role="progressbar"
+              aria-label="Simulation progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(overallProgress * 100)}
+            >
+              <i style={{ width: `${overallProgress * 100}%` }} />
+            </div>
+            <button
+              className={
+                panelOpen
+                  ? "mobile-parameters-trigger active"
+                  : "mobile-parameters-trigger"
+              }
+              onClick={() => {
+                setMobileLensOpen(false);
+                setPanelOpen(true);
+              }}
+              type="button"
+              aria-controls="parameter-sheet"
+              aria-expanded={panelOpen}
+            >
+              <span aria-hidden="true">⌁</span>
+              Parameters
+            </button>
+          </div>
         </div>
-        <div
-          className="mobile-run-progress"
-          role="progressbar"
-          aria-label="Simulation progress"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(overallProgress * 100)}
-        >
-          <i style={{ width: `${overallProgress * 100}%` }} />
-        </div>
+
+        {sliceInfo && (
+          <LayerScrubber
+            className="mobile-layer-scrubber"
+            inputId="mobile-inspection-layer"
+            sliceInfo={sliceInfo}
+            selectedLayer={selectedLayer}
+            selectedLayerZ={selectedLayerZ}
+            layerModeStatus={layerModeStatus}
+            following={stage === "exposing"}
+            locked={layerInspectionLocked}
+            sectionCutEnabled={sectionCutEnabled}
+            onLayerChange={setSelectedLayer}
+            onSectionCutToggle={() =>
+              setSectionCutEnabled((value) => !value)
+            }
+          />
+        )}
       </section>
 
       <button
