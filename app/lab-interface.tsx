@@ -11,6 +11,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import type { FieldMode, PsfPreview } from "./lab-viewport";
 import { shouldRunComparison } from "./comparison-mode";
+import { integrityPresentation } from "./result-presentation";
 import { shouldIgnoreLabShortcut } from "./keyboard-shortcuts";
 import {
   isLayerInspectionLocked,
@@ -1466,6 +1467,7 @@ export default function LabInterface() {
     setVariant(null);
     setComparisonView("B");
     setDirty(null);
+    setFieldMode("conversion");
     activeRunParamsRef.current = { ...params };
     variantRunningRef.current = true;
     const changesToolpath = changes.some(({ definition }) =>
@@ -1502,6 +1504,7 @@ export default function LabInterface() {
     }
     if (stage === "ready") {
       activeRunParamsRef.current = { ...params };
+      setFieldMode("conversion");
       workerRef.current?.postMessage({ type: "start" });
       setStage("exposing");
       return;
@@ -1515,6 +1518,7 @@ export default function LabInterface() {
       return;
     }
     if (stage === "paused") {
+      setFieldMode("development");
       workerRef.current?.postMessage({ type: "develop" });
       setStage("developing");
       return;
@@ -1599,6 +1603,7 @@ export default function LabInterface() {
     selectedRun ?? { conversion, oxygen, radicals, remaining };
 
   const displayMetrics = selectedRun?.metrics ?? metrics;
+  const integrity = integrityPresentation(stage, displayMetrics);
   const displaySliceMetrics = selectedRun?.sliceMetrics ?? sliceMetrics;
   const displaySlicePixels = selectedRun?.slicePixels ?? slicePixels;
   const displaySliceWidth = selectedRun?.sliceWidth ?? sliceWidth;
@@ -2084,15 +2089,15 @@ export default function LabInterface() {
           )}
           <div className="integrity-readout">
             <span>
-              target gel{" "}
+              {integrity.targetLabel}{" "}
               <strong>
-                {(displayMetrics.gelledFraction * 100).toFixed(1)}%
+                {(integrity.targetFraction * 100).toFixed(1)}%
               </strong>
             </span>
             <span title={`${displayMetrics.offTargetActiveVoxels} affected voxels`}>
-              spill gel{" "}
+              {integrity.spillLabel}{" "}
               <strong>
-                {(displayMetrics.offTargetGelledFraction * 100).toFixed(1)}%
+                {(integrity.spillFraction * 100).toFixed(1)}%
               </strong>
             </span>
             <span>

@@ -1247,7 +1247,7 @@ input:focus-visible {
 .comparison-card {
   position: absolute;
   z-index: 9;
-  top: 88px;
+  top: 136px;
   left: 50%;
   width: 366px;
   padding: 12px 13px;
