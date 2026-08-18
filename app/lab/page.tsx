@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
 import LabInterface from "../lab-interface";
+import {
+  opticalSetupImportNotice,
+  parseOpticalSetupHandoff,
+} from "../opticalsetup-handoff";
 import { pageMetadata } from "../site-config";
 
 export const metadata: Metadata = pageMetadata({
@@ -9,6 +13,17 @@ export const metadata: Metadata = pageMetadata({
   path: "/lab",
 });
 
-export default function LabPage() {
-  return <LabInterface />;
+type LabPageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function LabPage({ searchParams }: LabPageProps) {
+  const handoff = parseOpticalSetupHandoff((await searchParams) ?? {});
+  return (
+    <LabInterface
+      importedFromOpticalSetup={Boolean(handoff)}
+      initialNotice={opticalSetupImportNotice(handoff)}
+      initialParams={handoff?.params}
+    />
+  );
 }

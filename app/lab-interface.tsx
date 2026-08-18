@@ -168,6 +168,12 @@ type ParameterDefinition = {
   log?: boolean;
 };
 
+type LabInterfaceProps = {
+  importedFromOpticalSetup?: boolean;
+  initialNotice?: string | null;
+  initialParams?: Partial<ModelParams>;
+};
+
 const DEFAULT_PARAMS: ModelParams = {
   layerHeight: 0.48,
   hatchSpacing: 0.72,
@@ -1021,10 +1027,20 @@ function processIndex(stage: LabStage, exposureProgress: number) {
   return 3;
 }
 
-export default function LabInterface() {
+export default function LabInterface({
+  importedFromOpticalSetup = false,
+  initialNotice = null,
+  initialParams,
+}: LabInterfaceProps = {}) {
+  const initialModelParamsRef = useRef<ModelParams>({
+    ...DEFAULT_PARAMS,
+    ...initialParams,
+  });
   const workerRef = useRef<Worker | null>(null);
   const variantRunningRef = useRef(false);
-  const activeRunParamsRef = useRef<ModelParams>({ ...DEFAULT_PARAMS });
+  const activeRunParamsRef = useRef<ModelParams>({
+    ...initialModelParamsRef.current,
+  });
   const completedRunRef = useRef<RunResult | null>(null);
   const lensTriggerRef = useRef<HTMLButtonElement | null>(null);
   const parameterSheetRef = useRef<HTMLElement | null>(null);
@@ -1038,10 +1054,14 @@ export default function LabInterface() {
     remaining: Uint8Array;
   } | null>(null);
 
-  const [params, setParams] = useState<ModelParams>(DEFAULT_PARAMS);
+  const [params, setParams] = useState<ModelParams>(() => ({
+    ...initialModelParamsRef.current,
+  }));
   const [stage, setStage] = useState<LabStage>("model");
-  const [panelTab, setPanelTab] = useState<PanelTab>("resin");
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelTab, setPanelTab] = useState<PanelTab>(
+    importedFromOpticalSetup ? "light" : "resin",
+  );
+  const [panelOpen, setPanelOpen] = useState(importedFromOpticalSetup);
   const [isMobileLayout, setIsMobileLayout] = useState(false);
   const [mobileLensOpen, setMobileLensOpen] = useState(false);
   const [dirty, setDirty] = useState<DirtyKind>(null);
@@ -1071,7 +1091,7 @@ export default function LabInterface() {
   const [baseline, setBaseline] = useState<RunResult | null>(null);
   const [variant, setVariant] = useState<RunResult | null>(null);
   const [comparisonView, setComparisonView] = useState<"A" | "B">("B");
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(initialNotice);
   const [dragging, setDragging] = useState(false);
   const [solverState, setSolverState] =
     useState<SolverState>("initializing");
