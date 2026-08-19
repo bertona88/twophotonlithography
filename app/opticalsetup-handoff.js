@@ -7,6 +7,7 @@ const FIELDS = [
   { query: 'sourcePowerMw', key: 'power', label: 'source power', min: 0, max: 1000 },
   { query: 'repetitionRateMHz', key: 'repetitionRate', label: 'repetition rate', min: 10, max: 100 },
   { query: 'pulseDurationFs', key: 'pulseDuration', label: 'pulse duration', min: 50, max: 400 },
+  { query: 'numericalAperture', key: 'na', label: 'numerical aperture', min: 0.7, max: 1.49 },
 ];
 
 function valuesFor(input, key) {
@@ -48,15 +49,18 @@ export function parseOpticalSetupHandoff(input = {}) {
 export function opticalSetupImportNotice(handoff) {
   if (!handoff) return null;
   if (!handoff.imported.length) {
-    return 'The OpticalSetup link contained no laser values supported by this lab.';
+    return 'The OpticalSetup link contained no setup values supported by this lab.';
   }
 
   const count = handoff.imported.length;
-  let notice = `Imported ${count} compatible laser ${count === 1 ? 'parameter' : 'parameters'} from OpticalSetup.`;
+  let notice = `Imported ${count} compatible setup ${count === 1 ? 'parameter' : 'parameters'} from OpticalSetup.`;
   if (handoff.rejected.length) notice += ` Ignored invalid ${handoff.rejected.join(', ')}.`;
   if (handoff.imported.includes('power') || handoff.imported.includes('pulseDuration')) {
     notice += ' Source power and pulse duration were copied into specimen-plane controls; verify delivery losses and pulse broadening.';
   }
-  notice += ' NA, scan, photoinitiator, bandwidth, and polarization settings keep the lab defaults; its optical model assumes circular polarization.';
+  notice += handoff.imported.includes('na')
+    ? ' NA was copied from the single objective traced to the sample.'
+    : ' NA keeps the lab default because no single traced objective was supplied.';
+  notice += ' Scan, photoinitiator, bandwidth, and polarization settings keep the lab defaults; its optical model assumes circular polarization.';
   return notice;
 }

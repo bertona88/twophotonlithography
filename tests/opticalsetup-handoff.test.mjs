@@ -11,13 +11,14 @@ const identity = {
   v: "1",
 };
 
-test("imports the four compatible OpticalSetup laser parameters", () => {
+test("imports the compatible OpticalSetup laser and objective parameters", () => {
   const handoff = parseOpticalSetupHandoff({
     ...identity,
     wavelengthNm: "780",
     sourcePowerMw: "16",
     repetitionRateMHz: "80",
     pulseDurationFs: "100",
+    numericalAperture: "1.2",
   });
 
   assert.deepEqual(handoff, {
@@ -26,12 +27,14 @@ test("imports the four compatible OpticalSetup laser parameters", () => {
       power: 16,
       repetitionRate: 80,
       pulseDuration: 100,
+      na: 1.2,
     },
-    imported: ["wavelength", "power", "repetitionRate", "pulseDuration"],
+    imported: ["wavelength", "power", "repetitionRate", "pulseDuration", "na"],
     rejected: [],
   });
-  assert.match(opticalSetupImportNotice(handoff), /Imported 4 compatible laser parameters/);
+  assert.match(opticalSetupImportNotice(handoff), /Imported 5 compatible setup parameters/);
   assert.match(opticalSetupImportNotice(handoff), /verify delivery losses and pulse broadening/);
+  assert.match(opticalSetupImportNotice(handoff), /NA was copied from the single objective traced to the sample/);
 });
 
 test("accepts partial presets and exact destination boundaries", () => {
@@ -41,6 +44,7 @@ test("accepts partial presets and exact destination boundaries", () => {
     sourcePowerMw: "1000",
     repetitionRateMHz: "100",
     pulseDurationFs: "400",
+    numericalAperture: "1.49",
   });
   const handoff = parseOpticalSetupHandoff(query);
   assert.deepEqual(handoff.params, {
@@ -48,11 +52,15 @@ test("accepts partial presets and exact destination boundaries", () => {
     power: 1000,
     repetitionRate: 100,
     pulseDuration: 400,
+    na: 1.49,
   });
 
   const partial = parseOpticalSetupHandoff({ ...identity, wavelengthNm: "1064" });
   assert.deepEqual(partial.params, { wavelength: 1064 });
   assert.deepEqual(partial.imported, ["wavelength"]);
+
+  const minimumNA = parseOpticalSetupHandoff({ ...identity, numericalAperture: "0.7" });
+  assert.deepEqual(minimumNA.params, { na: 0.7 });
 });
 
 test("rejects invalid supplied values without clamping valid neighbors", () => {
@@ -62,6 +70,7 @@ test("rejects invalid supplied values without clamping valid neighbors", () => {
     sourcePowerMw: "",
     repetitionRateMHz: "Infinity",
     pulseDurationFs: ["100", "120"],
+    numericalAperture: "1.5",
     ignoredFutureKey: "kept out of the model",
   });
 
@@ -72,8 +81,9 @@ test("rejects invalid supplied values without clamping valid neighbors", () => {
     "source power",
     "repetition rate",
     "pulse duration",
+    "numerical aperture",
   ]);
-  assert.match(opticalSetupImportNotice(handoff), /no laser values supported/);
+  assert.match(opticalSetupImportNotice(handoff), /no setup values supported/);
 });
 
 test("accepts only the sender's canonical unsigned-decimal number grammar", () => {
