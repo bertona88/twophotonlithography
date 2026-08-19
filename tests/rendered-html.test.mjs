@@ -109,6 +109,27 @@ test("renders the lab separately and keeps model evidence links", async () => {
   assert.match(methodHtml, /"@type":"Article"/);
 });
 
+test("server-renders a validated OpticalSetup laser handoff", async () => {
+  const app = await application();
+  const response = await app.fetch(
+    "/lab?from=opticalsetup&v=1&wavelengthNm=920&sourcePowerMw=24&repetitionRateMHz=80&pulseDurationFs=120",
+  );
+  assert.equal(response.status, 200);
+  const html = await response.text();
+
+  assert.match(html, /Imported 4 compatible laser parameters from OpticalSetup/);
+  assert.match(html, /Source power and pulse duration were copied into specimen-plane controls/);
+  assert.match(html, /optical model assumes circular polarization/);
+  assert.match(html, /aria-label="Wavelength numeric value"[^>]*value="920"/);
+  assert.match(html, /aria-label="Specimen power numeric value"[^>]*value="24"/);
+  assert.match(html, /aria-label="Repetition rate numeric value"[^>]*value="80"/);
+  assert.match(html, /aria-label="Pulse duration numeric value"[^>]*value="120"/);
+  assert.match(html, /<h2 id="parameter-sheet-title">Light &amp; motion<\/h2>/);
+  assert.match(html, /Specimen ready/);
+  assert.match(html, /Slice specimen/);
+  assert.doesNotMatch(html, /Exposure running/);
+});
+
 test("publishes crawl directives and every canonical route in the sitemap", async () => {
   const app = await application();
   const robotsResponse = await app.fetch("/robots.txt", "text/plain");

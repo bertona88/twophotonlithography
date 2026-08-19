@@ -9,6 +9,8 @@ path to deterministic reaction–diffusion polymerization and development.
 
 - Parameter-driven Micro-Benchy slicing with layer, hatch, contour, scan-speed,
   power, and motion controls
+- Versioned deep links from an illuminated 2PP resin in OpticalSetup, with
+  compatible pulsed-laser parameters validated and prefilled before a run
 - A timestamped Three.js exposure view with layer inspection
 - One authoritative adaptive 3D Rust/WebAssembly resin simulation running
   inside a TypeScript Web Worker, never on the browser main thread
