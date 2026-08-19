@@ -112,7 +112,7 @@ test("renders the lab separately and keeps model evidence links", async () => {
 test("server-renders a validated OpticalSetup laser handoff", async () => {
   const app = await application();
   const response = await app.fetch(
-    "/lab?from=opticalsetup&v=1&wavelengthNm=920&sourcePowerMw=24&repetitionRateMHz=80&pulseDurationFs=120&numericalAperture=1.2",
+    "/lab?from=opticalsetup&v=1&wavelengthNm=920&sourcePowerMw=24&repetitionRateMHz=80&pulseDurationFs=120&numericalAperture=0.01",
   );
   assert.equal(response.status, 200);
   const html = await response.text();
@@ -125,7 +125,7 @@ test("server-renders a validated OpticalSetup laser handoff", async () => {
   assert.match(html, /aria-label="Specimen power numeric value"[^>]*value="24"/);
   assert.match(html, /aria-label="Repetition rate numeric value"[^>]*value="80"/);
   assert.match(html, /aria-label="Pulse duration numeric value"[^>]*value="120"/);
-  assert.match(html, /aria-label="Numerical aperture numeric value"[^>]*value="1.2"/);
+  assert.match(html, /aria-label="Numerical aperture numeric value"[^>]*value="0.01"/);
   assert.match(html, /<h2 id="parameter-sheet-title">Light &amp; motion<\/h2>/);
   assert.match(html, /Specimen ready/);
   assert.match(html, /Loading Rust solver/);

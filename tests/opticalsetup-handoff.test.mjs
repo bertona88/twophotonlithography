@@ -59,8 +59,16 @@ test("accepts partial presets and exact destination boundaries", () => {
   assert.deepEqual(partial.params, { wavelength: 1064 });
   assert.deepEqual(partial.imported, ["wavelength"]);
 
-  const minimumNA = parseOpticalSetupHandoff({ ...identity, numericalAperture: "0.7" });
-  assert.deepEqual(minimumNA.params, { na: 0.7 });
+  const minimumNA = parseOpticalSetupHandoff({ ...identity, numericalAperture: "0.01" });
+  assert.deepEqual(minimumNA.params, { na: 0.01 });
+  assert.deepEqual(
+    parseOpticalSetupHandoff({ ...identity, numericalAperture: "0.009" }).rejected,
+    ["numerical aperture"],
+  );
+  assert.deepEqual(
+    parseOpticalSetupHandoff({ ...identity, numericalAperture: "1.5" }).rejected,
+    ["numerical aperture"],
+  );
 });
 
 test("rejects invalid supplied values without clamping valid neighbors", () => {

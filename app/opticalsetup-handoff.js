@@ -7,7 +7,7 @@ const FIELDS = [
   { query: 'sourcePowerMw', key: 'power', label: 'source power', min: 0, max: 1000 },
   { query: 'repetitionRateMHz', key: 'repetitionRate', label: 'repetition rate', min: 10, max: 100 },
   { query: 'pulseDurationFs', key: 'pulseDuration', label: 'pulse duration', min: 50, max: 400 },
-  { query: 'numericalAperture', key: 'na', label: 'numerical aperture', min: 0.7, max: 1.49 },
+  { query: 'numericalAperture', key: 'na', label: 'numerical aperture', min: 0.01, max: 1.49 },
 ];
 
 function valuesFor(input, key) {

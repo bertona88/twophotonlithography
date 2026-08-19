@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
 
-use crate::parameters::photoinitiator_absorption_factor;
+use crate::parameters::{photoinitiator_absorption_factor, MIN_NUMERICAL_APERTURE};
 use crate::{Parameters, ValidationError};
 
 const BASE_DIMS: [usize; 3] = [128, 72, 104];
@@ -1589,8 +1589,8 @@ fn build_vectorial_psf(
     pitch: [f64; 3],
 ) -> Vec<KernelVoxel> {
     let wavelength_um = wavelength_nm * 1e-3;
-    let lateral = 0.61 * wavelength_um / na.max(0.1);
-    let axial = 2.0 * REFRACTIVE_INDEX * wavelength_um / na.max(0.1).powi(2);
+    let lateral = 0.61 * wavelength_um / na.max(MIN_NUMERICAL_APERTURE);
+    let axial = 2.0 * REFRACTIVE_INDEX * wavelength_um / na.max(MIN_NUMERICAL_APERTURE).powi(2);
     let rx = ((2.4 * lateral / pitch[0]).ceil() as isize).clamp(2, 10);
     let ry = ((2.4 * lateral / pitch[1]).ceil() as isize).clamp(2, 10);
     let rz = ((2.2 * axial / pitch[2]).ceil() as isize).clamp(3, 18);
@@ -1717,9 +1717,9 @@ fn psf_subvoxel_samples(pitch: [f64; 3], optics: DebyeOptics, relative_source: f
     let wavelength_um = TWO_PI * REFRACTIVE_INDEX / optics.wave_number;
     let na = optics.theta_max.sin() * REFRACTIVE_INDEX;
     let estimated_fwhm = [
-        0.37 * wavelength_um / na.max(0.1),
-        0.37 * wavelength_um / na.max(0.1),
-        1.1 * REFRACTIVE_INDEX * wavelength_um / na.max(0.1).powi(2),
+        0.37 * wavelength_um / na.max(MIN_NUMERICAL_APERTURE),
+        0.37 * wavelength_um / na.max(MIN_NUMERICAL_APERTURE),
+        1.1 * REFRACTIVE_INDEX * wavelength_um / na.max(MIN_NUMERICAL_APERTURE).powi(2),
     ];
     std::array::from_fn(|axis| {
         if needs_subvoxel && estimated_fwhm[axis] < 2.0 * pitch[axis] {
@@ -2198,6 +2198,32 @@ mod tests {
 
     #[test]
     fn parameter_validation_enforces_public_bounds() {
+        Parameters {
+            na: MIN_NUMERICAL_APERTURE,
+            ..Parameters::default()
+        }
+        .validate()
+        .expect("the public numerical-aperture lower bound must be solver-safe");
+
+        let parameters = Parameters {
+            na: MIN_NUMERICAL_APERTURE - 0.001,
+            ..Parameters::default()
+        };
+        assert!(parameters
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("na"));
+        let parameters = Parameters {
+            na: 1.491,
+            ..Parameters::default()
+        };
+        assert!(parameters
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("na"));
+
         Parameters {
             speed: 100_000.0,
             ..Parameters::default()

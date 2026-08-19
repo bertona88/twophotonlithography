@@ -211,7 +211,7 @@ test("production worker initializes browser Wasm and honors its message contract
       {
         type: "previewOptics",
         requestId: 1,
-        na: 0.7,
+        na: 0.01,
         wavelength: parameters.wavelength,
       },
       (message) =>

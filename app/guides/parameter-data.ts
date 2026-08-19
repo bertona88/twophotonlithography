@@ -119,7 +119,7 @@ export const parameterGroups: ParameterGroup[] = [
         intuition: "How broadly the objective accepts light and how tightly it can concentrate the same total specimen power.",
         increase: "Narrows the focal distribution and raises central concentration, but can reduce overlap and does not guarantee greater whole-object survival.",
         watch: "Wavelength, voxel pitch, hatch and layer spacing, polarization, and aberration.",
-        model: "Sets the objective semi-angle in a normalized vectorial Debye field. The narrow core is volume-averaged when the grid under-resolves it.",
+        model: "Sets the objective semi-angle in a normalized vectorial Debye field from NA 0.01 to 1.49. The narrow core is volume-averaged when the grid under-resolves it; broad low-NA support is bounded by the simulated volume.",
       },
       {
         key: "wavelength",

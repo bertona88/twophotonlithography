@@ -298,10 +298,11 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         name: "Numerical aperture",
         symbol: "NA",
         unit: "",
-        min: 0.7,
+        min: 0.01,
         max: 1.49,
         step: 0.01,
         provenance: "input",
+        log: true,
       },
       {
         key: "wavelength",

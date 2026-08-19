@@ -9,6 +9,8 @@ use crate::simulation::{
 };
 
 pub(crate) const MAX_EXPOSURE_STEPS_TOTAL: u32 = 10_000_000;
+pub(crate) const MAX_NUMERICAL_APERTURE: f64 = 1.49;
+pub(crate) const MIN_NUMERICAL_APERTURE: f64 = 0.01;
 const MAX_EXPLICIT_DIFFUSION_COURANT: f64 = 0.5;
 const MIN_SLICER_SPACING_UM: f64 = 0.25;
 
@@ -164,7 +166,12 @@ impl Parameters {
         positive("pulseDuration", self.pulse_duration)?;
         positive("wavelength", self.wavelength)?;
         positive("piAbsorptionPeak", self.pi_absorption_peak)?;
-        positive("na", self.na)?;
+        finite("na", self.na)?;
+        if !(MIN_NUMERICAL_APERTURE..=MAX_NUMERICAL_APERTURE).contains(&self.na) {
+            return Err(ValidationError::new(format!(
+                "na must be between {MIN_NUMERICAL_APERTURE} and {MAX_NUMERICAL_APERTURE}"
+            )));
+        }
 
         nonnegative_f32("initiator", self.initiator)?;
         nonnegative_f32("oxygen", self.oxygen)?;
