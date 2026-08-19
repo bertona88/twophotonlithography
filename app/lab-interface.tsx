@@ -1032,14 +1032,11 @@ export default function LabInterface({
   initialNotice = null,
   initialParams,
 }: LabInterfaceProps = {}) {
-  const initialModelParamsRef = useRef<ModelParams>({
-    ...DEFAULT_PARAMS,
-    ...initialParams,
-  });
   const workerRef = useRef<Worker | null>(null);
   const variantRunningRef = useRef(false);
   const activeRunParamsRef = useRef<ModelParams>({
-    ...initialModelParamsRef.current,
+    ...DEFAULT_PARAMS,
+    ...initialParams,
   });
   const completedRunRef = useRef<RunResult | null>(null);
   const lensTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -1055,7 +1052,8 @@ export default function LabInterface({
   } | null>(null);
 
   const [params, setParams] = useState<ModelParams>(() => ({
-    ...initialModelParamsRef.current,
+    ...DEFAULT_PARAMS,
+    ...initialParams,
   }));
   const [stage, setStage] = useState<LabStage>("model");
   const [panelTab, setPanelTab] = useState<PanelTab>(
