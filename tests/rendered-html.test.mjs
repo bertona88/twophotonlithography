@@ -126,7 +126,7 @@ test("server-renders a validated OpticalSetup laser handoff", async () => {
   assert.match(html, /aria-label="Pulse duration numeric value"[^>]*value="120"/);
   assert.match(html, /<h2 id="parameter-sheet-title">Light &amp; motion<\/h2>/);
   assert.match(html, /Specimen ready/);
-  assert.match(html, /Slice specimen/);
+  assert.match(html, /Loading Rust solver/);
   assert.doesNotMatch(html, /Exposure running/);
 });
 
