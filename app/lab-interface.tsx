@@ -1116,7 +1116,7 @@ export default function LabInterface({
         setStage((current) => (current === "compare" ? "complete" : current));
       }
       if (initial) {
-        setPanelOpen(!matches);
+        setPanelOpen(importedFromOpticalSetup || !matches);
       } else if (matches || previousMatch !== matches) {
         setPanelOpen(false);
       }
@@ -1138,7 +1138,7 @@ export default function LabInterface({
       mobileQuery.removeEventListener("change", handleChange);
       orientationQuery.removeEventListener("change", handleOrientationChange);
     };
-  }, []);
+  }, [importedFromOpticalSetup]);
 
   useEffect(() => {
     if (!isMobileLayout || !panelOpen) return;
