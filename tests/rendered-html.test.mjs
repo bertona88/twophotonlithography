@@ -125,6 +125,10 @@ test("server-renders a validated OpticalSetup laser handoff", async () => {
   assert.match(html, /aria-label="Specimen power numeric value"[^>]*value="24"/);
   assert.match(html, /aria-label="Repetition rate numeric value"[^>]*value="80"/);
   assert.match(html, /aria-label="Pulse duration numeric value"[^>]*value="120"/);
+  assert.match(
+    html,
+    /aria-label="Numerical aperture"[^>]*type="range"[^>]*min="0.01"[^>]*max="1.49"[^>]*step="0.01"[^>]*value="0.01"/,
+  );
   assert.match(html, /aria-label="Numerical aperture numeric value"[^>]*value="0.01"/);
   assert.match(html, /<h2 id="parameter-sheet-title">Light &amp; motion<\/h2>/);
   assert.match(html, /Specimen ready/);

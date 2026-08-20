@@ -302,7 +302,6 @@ const PARAMETER_GROUPS: Record<Exclude<PanelTab, "specimen">, ParameterDefinitio
         max: 1.49,
         step: 0.01,
         provenance: "input",
-        log: true,
       },
       {
         key: "wavelength",
