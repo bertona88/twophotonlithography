@@ -79,6 +79,13 @@ export function SiteFooter() {
         <a href="/wofi.json">Provenance</a>
         <a href="/LICENSE.txt">License</a>
         <a
+          href="https://andreabertoncini.com"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Created by Andrea Bertoncini <span aria-hidden="true">↗</span>
+        </a>
+        <a
           href="https://github.com/bertona88/twophotonlithography"
           target="_blank"
           rel="noreferrer"
