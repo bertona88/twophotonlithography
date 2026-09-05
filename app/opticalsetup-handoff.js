@@ -26,6 +26,12 @@ export function parseOpticalSetupHandoff(input = {}) {
   if (singleValue(input, 'from') !== HANDOFF_SOURCE
     || singleValue(input, 'v') !== HANDOFF_VERSION) return null;
 
+  const basisValues = valuesFor(input, 'basis');
+  const basis = basisValues.length === 0 ? undefined
+    : basisValues.length === 1 && basisValues[0] === 'paper' ? 'paper'
+      : null;
+  if (basis === null) return null;
+
   const params = {};
   const imported = [];
   const rejected = [];
@@ -43,7 +49,7 @@ export function parseOpticalSetupHandoff(input = {}) {
     imported.push(field.key);
   }
 
-  return { params, imported, rejected };
+  return { params, imported, rejected, ...(basis ? { basis } : {}) };
 }
 
 export function opticalSetupImportNotice(handoff) {
@@ -55,6 +61,10 @@ export function opticalSetupImportNotice(handoff) {
   const count = handoff.imported.length;
   let notice = `Imported ${count} compatible setup ${count === 1 ? 'parameter' : 'parameters'} from OpticalSetup.`;
   if (handoff.rejected.length) notice += ` Ignored invalid ${handoff.rejected.join(', ')}.`;
+  if (handoff.basis === 'paper') {
+    notice += ' This is a partial literature preset: only verified exact values were supplied; all other controls keep the lab defaults.';
+    return notice;
+  }
   if (handoff.imported.includes('power') || handoff.imported.includes('pulseDuration')) {
     notice += ' Source power and pulse duration were copied into specimen-plane controls; verify delivery losses and pulse broadening.';
   }
