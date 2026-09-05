@@ -134,3 +134,41 @@ test("ignores unrelated, unsupported-version, and duplicate-identity queries", (
   assert.equal(parseOpticalSetupHandoff({ ...identity, basis: ["paper", "paper"] }), null);
   assert.equal(opticalSetupImportNotice(null), null);
 });
+
+
+test("paper presets retain source-plane and model-default notices", () => {
+  for (const numericalAperture of [undefined, "1.4"]) {
+    const handoff = parseOpticalSetupHandoff({
+      ...identity,
+      basis: "paper",
+      sourcePowerMw: "16",
+      pulseDurationFs: "100",
+      ...(numericalAperture ? { numericalAperture } : {}),
+    });
+    const notice = opticalSetupImportNotice(handoff);
+    assert.match(notice, /partial literature preset/);
+    assert.match(notice, /copied into specimen-plane controls/);
+    assert.match(notice, /verify delivery losses and pulse broadening/);
+    assert.match(notice, /Scan, photoinitiator, bandwidth, and polarization settings keep the lab defaults/);
+    assert.match(notice, /assumes circular polarization/);
+    assert.doesNotMatch(notice, /NA was copied from the single objective traced/);
+    assert.match(notice, numericalAperture
+      ? /NA comes from the literature preset/
+      : /NA keeps the lab default because the literature subset supplies no NA/);
+  }
+});
+
+test("partial source-plane notices name only the imported quantity", () => {
+  const duration = opticalSetupImportNotice(parseOpticalSetupHandoff({
+    ...identity, basis: "paper", pulseDurationFs: "100",
+  }));
+  assert.match(duration, /Pulse duration was copied/);
+  assert.match(duration, /verify pulse broadening/);
+  assert.doesNotMatch(duration, /Source power/);
+  const power = opticalSetupImportNotice(parseOpticalSetupHandoff({
+    ...identity, basis: "paper", sourcePowerMw: "16",
+  }));
+  assert.match(power, /Source power was copied/);
+  assert.match(power, /verify delivery losses/);
+  assert.doesNotMatch(power, /pulse duration|pulse broadening/i);
+});

@@ -63,14 +63,23 @@ export function opticalSetupImportNotice(handoff) {
   if (handoff.rejected.length) notice += ` Ignored invalid ${handoff.rejected.join(', ')}.`;
   if (handoff.basis === 'paper') {
     notice += ' This is a partial literature preset: only verified exact values were supplied; all other controls keep the lab defaults.';
-    return notice;
   }
-  if (handoff.imported.includes('power') || handoff.imported.includes('pulseDuration')) {
+  if (handoff.imported.includes('power') && handoff.imported.includes('pulseDuration')) {
     notice += ' Source power and pulse duration were copied into specimen-plane controls; verify delivery losses and pulse broadening.';
+  } else if (handoff.imported.includes('power')) {
+    notice += ' Source power was copied into the specimen-plane power control; verify delivery losses.';
+  } else if (handoff.imported.includes('pulseDuration')) {
+    notice += ' Pulse duration was copied into the specimen-plane duration control; verify pulse broadening.';
   }
-  notice += handoff.imported.includes('na')
-    ? ' NA was copied from the single objective traced to the sample.'
-    : ' NA keeps the lab default because no single traced objective was supplied.';
+  if (handoff.basis === 'paper') {
+    notice += handoff.imported.includes('na')
+      ? ' NA comes from the literature preset, not a traced sample path.'
+      : ' NA keeps the lab default because the literature subset supplies no NA.';
+  } else {
+    notice += handoff.imported.includes('na')
+      ? ' NA was copied from the single objective traced to the sample.'
+      : ' NA keeps the lab default because no single traced objective was supplied.';
+  }
   notice += ' Scan, photoinitiator, bandwidth, and polarization settings keep the lab defaults; its optical model assumes circular polarization.';
   return notice;
 }
