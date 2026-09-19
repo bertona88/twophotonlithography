@@ -47,11 +47,9 @@ jobs:
           tar -xzf "${archive}" --strip-components=1 -C "${install_root}"
           install -m 0755 "${install_root}/wasm-pack" "${cargo_home}/bin/wasm-pack"
           wasm-pack --version
-      - run: npm run install:ci
-      - run: npm test
       - name: Verify pinned browser Wasm matches the reviewed Rust source
         id: verify-wasm
-        run: git diff --exit-code -- app/wasm/reaction_lens
+        run: npm run verify:wasm
       - name: Preserve rebuilt Wasm when verification fails
         if: failure() && steps.verify-wasm.outcome == 'failure'
         uses: actions/upload-artifact@v4
@@ -59,3 +57,5 @@ jobs:
           name: rebuilt-browser-wasm
           path: app/wasm/reaction_lens/
           if-no-files-found: error
+      - run: npm run install:ci
+      - run: npm test
