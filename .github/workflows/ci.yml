@@ -50,4 +50,12 @@ jobs:
       - run: npm run install:ci
       - run: npm test
       - name: Verify pinned browser Wasm matches the reviewed Rust source
+        id: verify-wasm
         run: git diff --exit-code -- app/wasm/reaction_lens
+      - name: Preserve rebuilt Wasm when verification fails
+        if: failure() && steps.verify-wasm.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rebuilt-browser-wasm
+          path: app/wasm/reaction_lens/
+          if-no-files-found: error
