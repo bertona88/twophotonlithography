@@ -54,4 +54,5 @@ wasm-pack build \
   --target "${target}" \
   --out-dir "${output}" \
   --out-name reaction_lens \
-  --release
+  --release \
+  -- --locked

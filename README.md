@@ -89,8 +89,10 @@ npm run dev
 ```
 
 `npm run dev` first builds the browser-targeted Wasm package, then starts Vite
-and Vinext. Generated Wasm bindings, Cargo targets, dependencies, build
-artifacts, Wrangler state, and the Vinext font cache are excluded from Git.
+and Vinext. The browser Wasm package in `app/wasm/reaction_lens` is committed
+so environments without Rust can use the reviewed artifact. Cargo targets,
+Node test bindings, dependencies, build artifacts, Wrangler state, and the
+Vinext font cache are excluded from Git.
 
 ## Build and validate
 
@@ -99,6 +101,16 @@ Build the browser Wasm package directly:
 ```bash
 npm run build:wasm
 ```
+
+After changing Rust sources or their dependencies, commit the regenerated
+`app/wasm/reaction_lens` package together with those changes. Check the committed
+artifact with `npm run verify:wasm`; it rebuilds using the pinned tools and
+requires byte-for-byte equality with `HEAD`. The Linux CI build is canonical;
+macOS output can differ even with the same Rust and wasm-pack versions. CI
+runs this check before the application suite and saves the rebuilt package as
+`rebuilt-browser-wasm` on mismatch. When updating from macOS, download that
+artifact from the CI run for your exact source revision, replace the tracked
+browser package with it, and commit it before rerunning CI.
 
 Create and validate a production build:
 
