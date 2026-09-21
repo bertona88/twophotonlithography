@@ -56,7 +56,7 @@ test("carbonization production worker preserves accepted state through pause, re
     const first = await h.send({ type: "step", runId: 1 }, h.snapshot(1, "paused"));
     assert.equal(first.diagnostics.acceptedSteps, 1);
     assert.ok(first.diagnostics.timeS > 0);
-    assert.equal(first.fields.byteLength, 32 * 9 * 8);
+    assert.equal(first.fields.byteLength, 32 * 19 * 8);
     const copied = new Float64Array(first.fields).slice();
     const saved = await h.send({ type: "export", runId: 1 }, m => m.type === "checkpoint" && m.runId === 1);
     // JSON round trip exercises the exact user download/import contract.
@@ -78,10 +78,10 @@ test("carbonization production worker preserves accepted state through pause, re
     assert.ok(Math.abs(end.diagnostics.relativeMassError) < 1e-10);
     const state = new Float64Array(end.fields);
     for (let i = 0; i < 32; i++) {
-      assert.ok(Math.abs(state[i * 9 + 1] - Math.exp(-2)) < 1e-12, "Wasm must agree with the native analytic reaction limit");
-      assert.ok(Math.abs(state[i * 9 + 2] - 0.25 * (1 - Math.exp(-2))) < 1e-12);
+      assert.ok(Math.abs(state[i * 19 + 1] - Math.exp(-2)) < 1e-12, "Wasm must agree with the native analytic reaction limit");
+      assert.ok(Math.abs(state[i * 19 + 2] - 0.25 * (1 - Math.exp(-2))) < 1e-12);
     }
-    assert.ok(state[3] > state[31 * 9 + 3]);
+    assert.ok(state[3] > state[31 * 19 + 3]);
     await h.send({ type: "restore", runId: 4, checkpoint }, h.snapshot(4, "ready"));
     const cancelled = await h.send({ type: "cancel", runId: 4 }, h.snapshot(4, "cancelled"));
     assert.equal(cancelled.diagnostics.checksum, restored.diagnostics.checksum);
@@ -129,12 +129,55 @@ test("the benchmark route declares its physical limits in rendered HTML", async 
   const html = await response.text();
   assert.match(html, /Inside the transforming strut/);
   assert.match(html, /not an sp² percentage/);
-  assert.match(html, /deformation, stress and furnace pressure are not solved/);
-  assert.match(html, /radial-reference|carbonization-lab/);
+  assert.match(html, /excludes end effects, bending, buckling, relaxation/);
+  assert.match(html, /radial-mechanics|carbonization-lab/);
   // Check that both the application bundle and the Wasm asset are emitted.
   const files = await readdir(path.join(root, "assets"));
   const wasm = files.find(name => /^reaction_lens_bg-.*\.wasm$/.test(name));
   assert.ok(wasm);
   const bytes = await readFile(path.join(root, "assets", wasm));
   assert.deepEqual([...bytes.subarray(0, 4)], [0, 97, 115, 109]);
+});
+
+test("coupled browser mechanics contracts freely, reacts against supports and validates saved geometry", async () => {
+  const h = await harness();
+  try {
+    const { defaults: config } = await h.wait(m => m.type === "ready");
+    config.radialCells = 16;
+    config.schedule = [{ timeS: 0, temperatureK: 900 }, { timeS: 10, temperatureK: 900 }];
+    config.material.reactionAPerS = 0.05; config.material.reactionEJMol = 0;
+    config.material.diffusivityM2S = 0;
+    config.maxStepS = 1;
+    const run = async (id) => {
+      await h.send({ type: "configure", runId: id, config }, h.snapshot(id, "ready"));
+      await h.send({ type: "start", runId: id }, h.snapshot(id, "running"));
+      return h.wait(h.snapshot(id, "complete"));
+    };
+    const free = await run(1);
+    assert.equal(free.diagnostics.schemaVersion, 2);
+    const fields = new Float64Array(free.fields);
+    const stretch = fields[7] ** (1 / 3);
+    assert.ok(Math.abs(free.diagnostics.currentRadiusM / config.radiusM - stretch) < 1e-8);
+    assert.ok(Math.abs(free.diagnostics.currentLengthM / config.lengthM - stretch) < 1e-8);
+    assert.ok(Math.abs(fields[10] - fields[7]) < 1e-8);
+    assert.ok(Math.abs(fields[11] / fields[6] - 1) < 1e-8);
+    assert.ok(free.diagnostics.mechanicalResidual < 1e-9);
+    config.mechanics.axialBoundary = "prescribed";
+    const constrained = await run(2);
+    assert.equal(constrained.diagnostics.currentLengthM, config.lengthM);
+    assert.ok(constrained.diagnostics.axialForceN > 0);
+    assert.ok(constrained.diagnostics.volumeRatio > free.diagnostics.volumeRatio);
+    const saved = await h.send({ type: "export", runId: 2 }, m => m.type === "checkpoint");
+    const bad = structuredClone(saved.checkpoint);
+    bad.state.deformation.radialFaces[3] = 0;
+    const error = await h.send({ type: "restore", runId: 3, checkpoint: bad }, m => m.type === "error" && m.runId === 3);
+    assert.match(error.message, /geometry/);
+    const retained = await h.send({ type: "export", runId: 2 }, m => m.type === "checkpoint");
+    assert.deepEqual(retained.checkpoint, saved.checkpoint);
+    config.mechanics.enabled = false;
+    const fixed = await run(4);
+    assert.equal(fixed.diagnostics.currentRadiusM, config.radiusM);
+    assert.equal(fixed.diagnostics.currentLengthM, config.lengthM);
+    assert.equal(fixed.diagnostics.axialForceN, 0);
+  } finally { await h.worker.terminate(); }
 });

@@ -1,6 +1,7 @@
-//! SI-unit, fixed-reference radial transformation benchmark. No mechanics,
-//! pressure, elemental composition, or volatile-to-solid feedback is solved.
+//! SI-unit radial transformation and generalized-plane-strain mechanics.
+//! No pressure, elemental composition, or volatile-to-solid feedback is solved.
 pub mod material;
+pub mod mechanics;
 pub mod schedule;
 pub mod specimen;
 mod transport;
@@ -12,9 +13,9 @@ use serde::{Deserialize, Serialize};
 use material::{arrhenius, Material};
 use schedule::TemperaturePoint;
 
-pub const MODEL_VERSION: &str = "radial-reference-v1";
-pub const FIELD_COUNT: usize = 9;
-pub const FIELD_ORDER: &str = "radius_m,precursor_fraction,char_fraction,mobile_fraction,network_order,micro_porosity,free_density_kg_m3,natural_jacobian,natural_isotropic_stretch";
+pub const MODEL_VERSION: &str = "radial-mechanics-v2";
+pub const FIELD_COUNT: usize = 19;
+pub const FIELD_ORDER: &str = "radius_m,precursor_fraction,char_fraction,mobile_fraction,network_order,micro_porosity,free_density_kg_m3,natural_jacobian,natural_isotropic_stretch,current_radius_m,current_jacobian,actual_density_kg_m3,radial_stretch,hoop_stretch,axial_stretch,radial_stress_pa,hoop_stress_pa,axial_stress_pa,current_outer_radius_m";
 pub type Result<T> = std::result::Result<T, Diagnostic>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,6 +57,7 @@ pub struct RadialConfig {
     pub length_m: f64,
     pub schedule: Vec<TemperaturePoint>,
     pub material: Material,
+    pub mechanics: mechanics::MechanicsConfig,
     pub max_step_s: f64,
     pub min_step_s: f64,
     pub relative_tolerance: f64,
@@ -89,6 +91,7 @@ impl Default for RadialConfig {
                 },
             ],
             material: Material::default(),
+            mechanics: mechanics::MechanicsConfig::default(),
             max_step_s: 10.0,
             min_step_s: 1e-5,
             relative_tolerance: 1e-3,
@@ -122,13 +125,14 @@ impl RadialConfig {
             return Err(invalid("radial solver peak-memory budget exceeded"));
         }
         schedule::validate(&self.schedule)?;
+        self.mechanics.validate()?;
         self.material.validate()
     }
 
     pub fn estimated_peak_bytes(&self) -> usize {
         // Current/full/fine/trial states, finite-volume workspace, snapshots,
         // serialization and copied transfer/checkpoint buffers, plus overhead.
-        65_536 + self.radial_cells.saturating_mul(1_024)
+        65_536 + self.radial_cells.saturating_mul(2_048)
     }
 }
 
@@ -147,6 +151,7 @@ pub struct State {
     pub time_s: f64,
     pub cells: Vec<Cell>,
     pub escaped_kg: f64,
+    pub deformation: mechanics::Deformation,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -183,6 +188,12 @@ pub struct Diagnostics {
     pub relative_mass_error: f64,
     pub mean_network_order: f64,
     pub min_natural_jacobian: f64,
+    pub current_radius_m: f64,
+    pub current_length_m: f64,
+    pub volume_ratio: f64,
+    pub axial_force_n: f64,
+    pub anchor_stretch: f64,
+    pub mechanical_residual: f64,
     pub accepted_steps: u32,
     pub rejected_steps: u32,
     pub next_step_s: f64,
@@ -214,6 +225,7 @@ impl PyrolysisCore {
             };
             config.radial_cells
         ];
+        let deformation = mechanics::Deformation::identity(config.radial_cells);
         Ok(Self {
             next_step_s: config.max_step_s,
             config,
@@ -221,6 +233,7 @@ impl PyrolysisCore {
                 time_s: 0.0,
                 cells,
                 escaped_kg: 0.0,
+                deformation,
             },
             accepted_steps: 0,
             rejected_steps: 0,
@@ -230,8 +243,10 @@ impl PyrolysisCore {
     }
 
     pub fn from_checkpoint(checkpoint: Checkpoint) -> Result<Self> {
-        if checkpoint.schema_version != 1 {
-            return Err(invalid("unsupported checkpoint schema"));
+        if checkpoint.schema_version != 2 {
+            return Err(invalid(
+                "unsupported checkpoint schema; use a version-2 mechanics checkpoint",
+            ));
         }
         let mut core = Self::new(checkpoint.config)?;
         if !checkpoint.state.time_s.is_finite()
@@ -254,7 +269,7 @@ impl PyrolysisCore {
 
     pub fn checkpoint(&self) -> Checkpoint {
         Checkpoint {
-            schema_version: 1,
+            schema_version: 2,
             config: self.config.clone(),
             state: self.state.clone(),
             next_step_s: self.next_step_s,
@@ -359,6 +374,20 @@ impl PyrolysisCore {
         for (index, cell) in state.cells.iter().enumerate() {
             material.properties(cell.precursor, cell.char, cell.order, index, state.time_s)?;
         }
+        if self.config.mechanics.enabled {
+            let natural = self.natural_stretches(&state)?;
+            state.deformation = mechanics::solve(
+                &old.deformation,
+                &natural,
+                &self.config.mechanics,
+                self.spring(),
+                self.anchor(state.time_s),
+            )
+            .map_err(|mut d| {
+                d.trial_time_s = state.time_s;
+                d
+            })?;
+        }
         let mut mobile: Vec<f64> = state.cells.iter().map(|cell| cell.mobile).collect();
         let diffusivity: Vec<f64> = state
             .cells
@@ -368,11 +397,12 @@ impl PyrolysisCore {
             })
             .collect();
         state.escaped_kg += material.initial_density()
-            * transport::diffuse(
+            * transport::diffuse_deformed(
                 &mut mobile,
                 &diffusivity,
                 self.config.radius_m,
                 self.config.length_m,
+                &state.deformation,
                 material.surface_transfer_m_s,
                 dt,
             );
@@ -381,6 +411,46 @@ impl PyrolysisCore {
         }
         self.validate_state(&state)?;
         Ok(state)
+    }
+
+    fn anchor(&self, time: f64) -> f64 {
+        1.0 + (self.config.mechanics.final_anchor_stretch - 1.0) * time / self.duration()
+    }
+    fn spring(&self) -> f64 {
+        if self.config.mechanics.axial_boundary == mechanics::AxialBoundary::Compliant {
+            self.config.mechanics.axial_stiffness_n_m * self.config.length_m
+                / (self.config.mechanics.shear_modulus_pa * PI * self.config.radius_m.powi(2))
+        } else {
+            0.0
+        }
+    }
+    fn natural_stretches(&self, state: &State) -> Result<Vec<[f64; 3]>> {
+        let m = &self.config.mechanics;
+        let thermal = (m.thermal_expansion_per_k
+            * (schedule::temperature(&self.config.schedule, state.time_s)
+                - self.config.schedule[0].temperature_k))
+            .exp();
+        state
+            .cells
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let j = self.config.material.properties(
+                    c.precursor,
+                    c.char,
+                    c.order,
+                    i,
+                    state.time_s,
+                )?[2];
+                let gamma = m.axial_anisotropy * c.char / (c.precursor + c.char);
+                let radial = j.cbrt() * thermal * (-gamma / 3.0).exp();
+                Ok([
+                    radial,
+                    radial,
+                    j.cbrt() * thermal * (2.0 * gamma / 3.0).exp(),
+                ])
+            })
+            .collect()
     }
 
     fn initial_cell_mass(&self, index: usize) -> f64 {
@@ -399,6 +469,7 @@ impl PyrolysisCore {
     }
 
     fn validate_state(&self, state: &State) -> Result<()> {
+        state.deformation.validate(self.config.radial_cells)?;
         let mut total = state.escaped_kg;
         if !total.is_finite() || total < 0.0 {
             return Err(invalid("invalid escaped mass"));
@@ -432,6 +503,33 @@ impl PyrolysisCore {
                 trial_time_s: state.time_s,
             });
         }
+        if self.config.mechanics.enabled {
+            let fixed =
+                self.config.mechanics.axial_boundary == mechanics::AxialBoundary::Prescribed;
+            let a = mechanics::assemble(
+                &state.deformation,
+                &self.natural_stretches(state)?,
+                self.config.mechanics.lame_ratio(),
+                self.spring(),
+                self.anchor(state.time_s),
+            );
+            if !a.energy.is_finite()
+                || a.residual(fixed) > 2e-9
+                || (fixed
+                    && (state.deformation.axial_stretch - self.anchor(state.time_s)).abs() > 1e-12)
+            {
+                return Err(invalid(
+                    "checkpoint or trial geometry is not in mechanical equilibrium",
+                ));
+            }
+        } else if state.deformation.radial_faces
+            != mechanics::Deformation::identity(self.config.radial_cells).radial_faces
+            || state.deformation.axial_stretch != 1.0
+        {
+            return Err(invalid(
+                "fixed-reference mode requires identity deformation",
+            ));
+        }
         Ok(())
     }
 
@@ -455,11 +553,23 @@ impl PyrolysisCore {
                 error = error.max(scaled(x, y));
             }
         }
-        error
+        for (x, y) in a
+            .deformation
+            .radial_faces
+            .iter()
+            .zip(&b.deformation.radial_faces)
+        {
+            error = error.max(scaled(*x, *y));
+        }
+        error.max(scaled(
+            a.deformation.axial_stretch,
+            b.deformation.axial_stretch,
+        ))
     }
 
     pub fn snapshot(&mut self) -> &[f64] {
         self.snapshot.clear();
+        let natural = self.natural_stretches(&self.state).expect("accepted state");
         for (index, cell) in self.state.cells.iter().enumerate() {
             let [phi, rho, j] = self
                 .config
@@ -472,6 +582,22 @@ impl PyrolysisCore {
                     self.state.time_s,
                 )
                 .expect("accepted state");
+            let deformation = &self.state.deformation;
+            let stretches = deformation.stretches(index, 0.5);
+            let jacobian = deformation.cell_jacobian(index);
+            let (_, p, _) = mechanics::response(
+                stretches,
+                natural[index],
+                self.config.mechanics.lame_ratio(),
+            );
+            let stress = if self.config.mechanics.enabled {
+                std::array::from_fn(|k| {
+                    p[k] * stretches[k] / stretches.iter().product::<f64>()
+                        * self.config.mechanics.shear_modulus_pa
+                })
+            } else {
+                [0.0; 3]
+            };
             self.snapshot.extend_from_slice(&[
                 (index as f64 + 0.5) * self.config.radius_m / self.config.radial_cells as f64,
                 cell.precursor,
@@ -482,6 +608,17 @@ impl PyrolysisCore {
                 rho,
                 j,
                 j.cbrt(),
+                0.5 * (deformation.radial_faces[index] + deformation.radial_faces[index + 1])
+                    * self.config.radius_m,
+                jacobian,
+                (cell.precursor + cell.char) * self.config.material.initial_density() / jacobian,
+                stretches[0],
+                stretches[1],
+                stretches[2],
+                stress[0],
+                stress[1],
+                stress[2],
+                deformation.radial_faces[index + 1] * self.config.radius_m,
             ]);
         }
         &self.snapshot
@@ -524,14 +661,61 @@ impl PyrolysisCore {
                 hash_value(value);
             }
         }
+        for value in &self.state.deformation.radial_faces {
+            hash_value(*value);
+        }
+        hash_value(self.state.deformation.axial_stretch);
+        let a = mechanics::assemble(
+            &self.state.deformation,
+            &self.natural_stretches(&self.state).expect("accepted state"),
+            self.config.mechanics.lame_ratio(),
+            0.0,
+            self.anchor(self.state.time_s),
+        );
+        let system = mechanics::assemble(
+            &self.state.deformation,
+            &self.natural_stretches(&self.state).expect("accepted state"),
+            self.config.mechanics.lame_ratio(),
+            self.spring(),
+            self.anchor(self.state.time_s),
+        );
+        let outer = *self
+            .state
+            .deformation
+            .radial_faces
+            .last()
+            .expect("radial faces");
         Diagnostics {
+            current_radius_m: outer * self.config.radius_m,
+            current_length_m: self.state.deformation.axial_stretch * self.config.length_m,
+            volume_ratio: outer * outer * self.state.deformation.axial_stretch,
+            axial_force_n: if self.config.mechanics.enabled {
+                a.gradient[self.config.radial_cells]
+                    * self.config.mechanics.shear_modulus_pa
+                    * PI
+                    * self.config.radius_m.powi(2)
+            } else {
+                0.0
+            },
+            anchor_stretch: self.anchor(self.state.time_s),
+            mechanical_residual: if self.config.mechanics.enabled {
+                system.residual(
+                    self.config.mechanics.axial_boundary == mechanics::AxialBoundary::Prescribed,
+                )
+            } else {
+                0.0
+            },
             model_version: MODEL_VERSION,
             calibration: "hypothetical; not fitted to a named resin",
-            geometry: "fixed reference cylinder; sealed ends; no solved mechanics",
+            geometry: if self.config.mechanics.enabled {
+                "deformed long cylinder; generalized plane strain; sealed ends; elastic mechanics"
+            } else {
+                "fixed reference cylinder; mechanics disabled"
+            },
             temperature_convention: "prescribed uniform specimen temperature",
             volatile_feedback: "none (one-way chemistry to mobile products)",
             atmosphere: "inert; zero ambient mobile-product concentration; no pressure model",
-            schema_version: 1,
+            schema_version: 2,
             field_order: FIELD_ORDER,
             radial_cells: self.config.radial_cells,
             time_s: self.state.time_s,

@@ -3,8 +3,8 @@ import { SiteHeader, SiteFooter } from "../site-chrome";
 import CarbonizationLab from "./carbonization-lab";
 
 export const metadata = pageMetadata({
-  title: "Carbonization Lab — Radial Transformation Benchmark",
-  description: "Explore mass-conserving reactions, volatile escape and evolving carbon-network state in a Rust/Wasm radial specimen benchmark.",
+  title: "Carbonization Lab — Finite-Strain Strut Benchmark",
+  description: "Explore mass-conserving carbonization, finite-strain shrinkage, axial supports and stress in an uncalibrated Rust/Wasm long-cylinder benchmark.",
   path: "/carbonization",
 });
 

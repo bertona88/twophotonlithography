@@ -320,3 +320,371 @@ fn extraction_is_full_resolution_and_retains_off_target_fragments() {
     assert!(specimen.ledger.relative_balance_error.abs() < 1e-14);
     assert_eq!(specimen.pitch_m, [1e-6, 2e-6, 3e-6]);
 }
+
+#[test]
+fn finite_strain_energy_gradient_and_tangent_match_independent_differences() {
+    use mechanics::*;
+    let s = [0.7, 0.8, 1.1];
+    let nat = [0.55, 0.6, 0.75];
+    let (_, p, h) = response(s, nat, 1.5);
+    for j in 0..3 {
+        let mut hi = s;
+        let mut lo = s;
+        hi[j] += 1e-6;
+        lo[j] -= 1e-6;
+        let (wh, ph, _) = response(hi, nat, 1.5);
+        let (wl, pl, _) = response(lo, nat, 1.5);
+        assert!(((wh - wl) / 2e-6 - p[j]).abs() < 1e-9);
+        for i in 0..3 {
+            assert!(((ph[i] - pl[i]) / 2e-6 - h[i][j]).abs() < 1e-8);
+        }
+    }
+    // Independent full 3D invariant energy, superposed rotation of F.
+    let angle = 0.71_f64;
+    let (sin, cos) = angle.sin_cos();
+    let f = [
+        [cos * s[0], -sin * s[1], 0.0],
+        [sin * s[0], cos * s[1], 0.0],
+        [0.0, 0.0, s[2]],
+    ];
+    let mut ic = 0.0;
+    for row in f {
+        for j in 0..3 {
+            ic += (row[j] / nat[j]).powi(2);
+        }
+    }
+    let det = (f[0][0] * f[1][1] - f[0][1] * f[1][0]) * f[2][2];
+    let jn = nat.iter().product::<f64>();
+    let logj = (det / jn).ln();
+    let w3d = jn * (0.5 * (ic - 3.0) - logj + 0.75 * logj * logj);
+    assert!((w3d - response(s, nat, 1.5).0).abs() < 1e-14);
+}
+
+#[test]
+fn annular_assembly_tangent_matches_residual_differences() {
+    use mechanics::*;
+    let mut d = Deformation::identity(8);
+    d.axial_stretch = 0.85;
+    for (i, r) in d.radial_faces.iter_mut().enumerate() {
+        *r *= 0.8 + 0.01 * i as f64;
+    }
+    let natural = vec![[0.65, 0.65, 0.7]; 8];
+    let a = assemble(&d, &natural, 1.5, 0.3, 0.9);
+    let eps = 1e-6;
+    for j in 0..9 {
+        let mut hi = d.clone();
+        let mut lo = d.clone();
+        if j == 8 {
+            hi.axial_stretch += eps;
+            lo.axial_stretch -= eps;
+        } else {
+            hi.radial_faces[j + 1] += eps;
+            lo.radial_faces[j + 1] -= eps;
+        }
+        let h = assemble(&hi, &natural, 1.5, 0.3, 0.9);
+        let l = assemble(&lo, &natural, 1.5, 0.3, 0.9);
+        assert!(((h.energy - l.energy) / (2.0 * eps) - a.gradient[j]).abs() < 1e-7);
+    }
+}
+
+#[test]
+fn free_finite_contraction_and_anisotropy_recover_stress_free_tensor() {
+    use mechanics::*;
+    for n in [4, 16, 64] {
+        for natural in [[0.5; 3], [0.4, 0.4, 0.78125]] {
+            let config = MechanicsConfig::default();
+            let d = solve(
+                &Deformation::identity(n),
+                &vec![natural; n],
+                &config,
+                0.0,
+                1.0,
+            )
+            .unwrap();
+            for i in 0..n {
+                let s = d.stretches(i, 0.5);
+                for j in 0..3 {
+                    assert!((s[j] - natural[j]).abs() < 2e-9);
+                }
+                let (_, p, _) = response(s, natural, config.lame_ratio());
+                assert!(p.iter().all(|x| x.abs() < 2e-9));
+                assert!((d.cell_jacobian(i) - 0.125).abs() < 1e-9);
+            }
+        }
+    }
+}
+
+#[test]
+fn constrained_cylinder_agrees_with_independent_homogeneous_uniaxial_solution() {
+    use mechanics::*;
+    let config = MechanicsConfig {
+        axial_boundary: AxialBoundary::Prescribed,
+        ..MechanicsConfig::default()
+    };
+    let natural = 0.55_f64;
+    let axial = 1.0;
+    // Traction-free sides give mu*(b^2-1)+lambda*ln(b^2*lambda_z/a)=0.
+    let mut lo = 0.01_f64;
+    let mut hi = 2.0_f64;
+    for _ in 0..100 {
+        let b = (lo + hi) * 0.5;
+        if b * b - 1.0 + config.lame_ratio() * (b * b * axial / natural).ln() > 0.0 {
+            hi = b;
+        } else {
+            lo = b;
+        }
+    }
+    let expected_radius = natural * (lo + hi) * 0.5;
+    let d = solve(
+        &Deformation::identity(32),
+        &vec![[natural; 3]; 32],
+        &config,
+        0.0,
+        axial,
+    )
+    .unwrap();
+    assert!((d.radial_faces[32] - expected_radius).abs() < 1e-9);
+    assert_eq!(d.axial_stretch, axial);
+    let a = assemble(&d, &vec![[natural; 3]; 32], config.lame_ratio(), 0.0, 1.0);
+    assert!(a.residual(true) < 1e-9);
+    assert!(a.gradient[32] > 0.0);
+    assert!((d.cell_jacobian(0) - natural.powi(3)).abs() > 0.01);
+}
+
+#[test]
+fn moving_anchor_and_compliant_support_balance_axial_force() {
+    use mechanics::*;
+    let natural = vec![[0.6; 3]; 16];
+    let free = solve(
+        &Deformation::identity(16),
+        &natural,
+        &MechanicsConfig::default(),
+        0.0,
+        1.0,
+    )
+    .unwrap();
+    let config = MechanicsConfig {
+        axial_boundary: AxialBoundary::Compliant,
+        ..MechanicsConfig::default()
+    };
+    let spring = 2.0;
+    let anchor = 0.8;
+    let d = solve(
+        &Deformation::identity(16),
+        &natural,
+        &config,
+        spring,
+        anchor,
+    )
+    .unwrap();
+    assert!(d.axial_stretch > free.axial_stretch && d.axial_stretch < anchor);
+    let body = assemble(&d, &natural, config.lame_ratio(), 0.0, anchor);
+    assert!((body.gradient[16] + spring * (d.axial_stretch - anchor)).abs() < 1e-9);
+    let prescribed = MechanicsConfig {
+        axial_boundary: AxialBoundary::Prescribed,
+        ..config
+    };
+    let d = solve(&d, &natural, &prescribed, 0.0, 0.7).unwrap();
+    assert_eq!(d.axial_stretch, 0.7);
+}
+
+#[test]
+fn heterogeneous_transformation_is_compatible_and_converges_under_refinement() {
+    use mechanics::*;
+    let compute = |n: usize| {
+        let natural: Vec<_> = (0..n)
+            .map(|i| {
+                let r = (i as f64 + 0.5) / n as f64;
+                [0.6 + 0.15 * r * r; 3]
+            })
+            .collect();
+        let c = MechanicsConfig::default();
+        let d = solve(&Deformation::identity(n), &natural, &c, 0.0, 1.0).unwrap();
+        let a = assemble(&d, &natural, c.lame_ratio(), 0.0, 1.0);
+        assert!(a.residual(false) < 1e-9);
+        assert!(
+            a.energy > 1e-5,
+            "heterogeneous natural stretches cannot be assigned independently"
+        );
+        (d.radial_faces[n], d.axial_stretch)
+    };
+    let reference = compute(256);
+    let error = |x: (f64, f64)| (x.0 - reference.0).abs() + (x.1 - reference.1).abs();
+    let e8 = error(compute(8));
+    let e16 = error(compute(16));
+    let e32 = error(compute(32));
+    assert!(e16 < 0.4 * e8 && e32 < 0.4 * e16, "{e8} {e16} {e32}");
+}
+
+#[test]
+fn moving_transport_preserves_reference_inventory_and_identity_limit() {
+    use mechanics::*;
+    let mut fixed: Vec<_> = (0..32).map(|i| 0.1 + i as f64 / 64.0).collect();
+    let mut moving = fixed.clone();
+    let d = vec![0.2; 32];
+    let escaped = transport::diffuse(&mut fixed, &d, 1.0, 2.0, 0.1, 0.2);
+    let other = transport::diffuse_deformed(
+        &mut moving,
+        &d,
+        1.0,
+        2.0,
+        &Deformation::identity(32),
+        0.1,
+        0.2,
+    );
+    assert!((escaped - other).abs() < 1e-14);
+    for (a, b) in fixed.iter().zip(&moving) {
+        assert!((a - b).abs() < 1e-13);
+    }
+    let mut def = Deformation::identity(32);
+    for r in &mut def.radial_faces {
+        *r *= 0.5;
+    }
+    def.axial_stretch = 0.4;
+    let inventory = |v: &[f64]| {
+        v.iter()
+            .enumerate()
+            .map(|(i, x)| x * (2 * i + 1) as f64 * 2.0 * PI / 1024.0)
+            .sum::<f64>()
+    };
+    let before = inventory(&moving);
+    let escaped = transport::diffuse_deformed(&mut moving, &d, 1.0, 2.0, &def, 0.1, 0.2);
+    assert!((inventory(&moving) + escaped - before).abs() < 1e-13);
+    let zero = vec![0.0; 32];
+    let previous = moving.clone();
+    assert_eq!(
+        transport::diffuse_deformed(&mut moving, &zero, 1.0, 2.0, &def, 0.0, 1.0),
+        0.0
+    );
+    for (a, b) in previous.iter().zip(&moving) {
+        assert!((a - b).abs() < 1e-14);
+    }
+}
+
+#[test]
+fn contracted_surface_limited_escape_uses_current_area_and_volume() {
+    let mut def = mechanics::Deformation::identity(16);
+    for r in &mut def.radial_faces {
+        *r *= 0.5;
+    }
+    def.axial_stretch = 0.7;
+    let mut mobile = vec![1.0; 16];
+    for _ in 0..1000 {
+        transport::diffuse_deformed(&mut mobile, &[1e5; 16], 1.0, 1.0, &def, 0.1, 0.001);
+    }
+    let exact = (-0.4_f64).exp(); // 2 h / current radius = 0.4 / s.
+    for x in mobile {
+        assert!((x - exact).abs() < 6e-5, "{x}");
+    }
+}
+
+#[test]
+fn coupled_free_geometry_density_and_thermal_cooling_are_consistent() {
+    let mut config = isothermal(100.0);
+    config.material.diffusivity_m2_s = 0.0;
+    let mut core = PyrolysisCore::new(config).unwrap();
+    finish(&mut core);
+    for row in core.snapshot().chunks_exact(FIELD_COUNT) {
+        assert!((row[10] - row[7]).abs() < 1e-8);
+        assert!((row[11] / row[6] - 1.0).abs() < 1e-8);
+        assert!(row[15..18].iter().all(|s| s.abs() < 1.0));
+    }
+    let mut config = RadialConfig::default();
+    config.material.reaction_a_per_s = 0.0;
+    config.mechanics.thermal_expansion_per_k = 1e-4;
+    config.schedule = vec![
+        TemperaturePoint {
+            time_s: 0.0,
+            temperature_k: 300.0,
+        },
+        TemperaturePoint {
+            time_s: 10.0,
+            temperature_k: 900.0,
+        },
+        TemperaturePoint {
+            time_s: 20.0,
+            temperature_k: 300.0,
+        },
+    ];
+    let mut core = PyrolysisCore::new(config).unwrap();
+    while core.state.time_s < 10.0 {
+        assert!(core.advance());
+    }
+    assert!((core.state.deformation.axial_stretch - 0.06_f64.exp()).abs() < 1e-8);
+    finish(&mut core);
+    assert!((core.diagnostics().volume_ratio - 1.0).abs() < 1e-8);
+    assert_eq!(core.state.cells[0].precursor, 1.0);
+}
+
+#[test]
+fn geometry_checkpoint_corruption_is_rejected_and_constrained_replay_is_exact() {
+    let mut config = isothermal(50.0);
+    config.mechanics.axial_boundary = mechanics::AxialBoundary::Compliant;
+    config.mechanics.final_anchor_stretch = 0.8;
+    let mut core = PyrolysisCore::new(config).unwrap();
+    for _ in 0..5 {
+        assert!(core.advance());
+    }
+    let checkpoint = core.checkpoint();
+    let mut replay = PyrolysisCore::from_checkpoint(checkpoint.clone()).unwrap();
+    assert!(core.advance());
+    assert!(replay.advance());
+    assert_eq!(core.diagnostics().checksum, replay.diagnostics().checksum);
+    let mut bad = checkpoint.clone();
+    bad.state.deformation.radial_faces[4] = 0.0;
+    assert!(PyrolysisCore::from_checkpoint(bad).is_err());
+    let mut bad = checkpoint.clone();
+    bad.state.deformation.axial_stretch *= 1.01;
+    assert!(PyrolysisCore::from_checkpoint(bad).is_err());
+    let mut bad = checkpoint;
+    bad.schema_version = 1;
+    assert!(PyrolysisCore::from_checkpoint(bad).is_err());
+}
+
+#[test]
+fn coupled_time_refinement_converges_to_expanding_surface_escape_solution() {
+    // Uniform mobile inventory, very fast mixing, pure thermal expansion:
+    // R(t)=R_initial*exp(b*t), m/m_initial=exp[-2h/R_initial*(1-exp(-bt))/b].
+    let compute = |dt: f64| {
+        let mut config = isothermal(10.0);
+        config.radial_cells = 8;
+        config.material.reaction_a_per_s = 0.0;
+        config.material.network_a_per_s = 0.0;
+        config.material.diffusivity_m2_s = 1e-6;
+        config.material.surface_transfer_m_s = 1e-7;
+        config.mechanics.thermal_expansion_per_k = 1e-4;
+        config.schedule[0].temperature_k = 300.0;
+        config.schedule[1].temperature_k = 900.0;
+        let core = PyrolysisCore::new(config).unwrap();
+        let mut state = core.state.clone();
+        for c in &mut state.cells {
+            c.precursor = 0.8;
+            c.mobile = 0.2;
+        }
+        state.deformation = mechanics::solve(
+            &state.deformation,
+            &core.natural_stretches(&state).unwrap(),
+            &core.config.mechanics,
+            0.0,
+            1.0,
+        )
+        .unwrap();
+        for _ in 0..(10.0 / dt).round() as usize {
+            state = core.trial(&state, dt).unwrap();
+        }
+        state
+            .cells
+            .iter()
+            .enumerate()
+            .map(|(i, c)| core.initial_cell_mass(i) * c.mobile)
+            .sum::<f64>()
+            / (core.initial_mass() * 0.2)
+    };
+    let b = 0.006_f64;
+    let exact = (-0.2 / 0.8_f64.cbrt() * (1.0 - (-10.0 * b).exp()) / b).exp();
+    let errors = [0.5, 0.25, 0.125].map(|dt| (compute(dt) - exact).abs());
+    assert!(
+        errors[1] < 0.6 * errors[0] && errors[2] < 0.6 * errors[1],
+        "{errors:?}"
+    );
+}

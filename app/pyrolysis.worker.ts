@@ -29,7 +29,7 @@ function publish() {
   else if (diagnostics.complete) { status = "complete"; stop(); }
   const ptr = core.get_snapshot();
   const length = core.snapshot_len();
-  if (diagnostics.schemaVersion !== 1 || diagnostics.fieldOrder !== PYROLYSIS_FIELDS.join(",") ||
+  if (diagnostics.schemaVersion !== 2 || diagnostics.fieldOrder !== PYROLYSIS_FIELDS.join(",") ||
       length !== diagnostics.radialCells * PYROLYSIS_FIELDS.length ||
       !Number.isSafeInteger(ptr) || ptr < 0 || ptr % 8 !== 0 || ptr + length * 8 > memory.buffer.byteLength) {
     throw new Error("Invalid Rust radial snapshot contract");

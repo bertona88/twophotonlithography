@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { PyrolysisConfig, PyrolysisDiagnostics, PyrolysisMessage, PyrolysisStatus } from "../pyrolysis-types";
+import { PYROLYSIS_FIELDS, type PyrolysisConfig, type PyrolysisDiagnostics, type PyrolysisMessage, type PyrolysisStatus } from "../pyrolysis-types";
 import styles from "./carbonization.module.css";
 
 type View = { fields: Float64Array; diagnostics: PyrolysisDiagnostics; config: PyrolysisConfig };
@@ -14,8 +14,17 @@ const fields = [
   { index: 4, label: "Carbon-network order", unit: "surrogate, not sp²", max: 1 },
   { index: 5, label: "Unresolved micro-porosity", unit: "fraction", max: 1 },
   { index: 6, label: "Stress-free bulk density", unit: "kg/m³", max: 2200 },
-  { index: 7, label: "Natural volume ratio J", unit: "constitutive, not solved volume", max: 1 },
+  { index: 7, label: "Natural volume ratio J", unit: "stress-free constitutive ratio", max: 1 },
+  { index: 10, label: "Actual volume ratio", unit: "solved J", max: 1 },
+  { index: 11, label: "Actual solid density", unit: "kg/m³", max: 2200 },
+  { index: 12, label: "Radial stretch", unit: "current / reference", max: 1 },
+  { index: 13, label: "Hoop stretch", unit: "current / reference", max: 1 },
+  { index: 14, label: "Axial stretch", unit: "current / reference", max: 1 },
+  { index: 15, label: "Radial Cauchy stress", unit: "Pa · tension positive", max: 1 },
+  { index: 16, label: "Hoop Cauchy stress", unit: "Pa · tension positive", max: 1 },
+  { index: 17, label: "Axial Cauchy stress", unit: "Pa · tension positive", max: 1 },
 ];
+const stride = PYROLYSIS_FIELDS.length;
 const percent = (value: number) => `${(100 * value).toFixed(2)}%`;
 
 function download(name: string, content: string, type = "application/json") {
@@ -24,15 +33,15 @@ function download(name: string, content: string, type = "application/json") {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function Chart({ series, label, xLabel, yLabel, maximum = 1 }: {
+function Chart({ series, label, xLabel, yLabel, maximum = 1, minimum = 0 }: {
   series: { values: [number, number][]; color: string; dashed?: boolean; name: string }[];
-  label: string; xLabel: string; yLabel: string; maximum?: number;
+  label: string; xLabel: string; yLabel: string; maximum?: number; minimum?: number;
 }) {
   return <div className={styles.chart}>
     <svg viewBox="0 0 600 240" role="img" aria-label={label}>
       <title>{label}</title>
-      {[0, 0.5, 1].map(v => <g key={v}><line x1="50" x2="580" y1={200 - v * 165} y2={200 - v * 165} stroke="#303541" /><text x="42" y={204 - v * 165} textAnchor="end">{(v * maximum).toPrecision(2)}</text></g>)}
-      {series.map(s => <polyline key={s.name} fill="none" stroke={s.color} strokeWidth="2.5" strokeDasharray={s.dashed ? "6 4" : undefined} points={s.values.map(([x, y]) => `${50 + 530 * x},${200 - 165 * y / maximum}`).join(" ")} />)}
+      {[0, 0.5, 1].map(v => <g key={v}><line x1="50" x2="580" y1={200 - v * 165} y2={200 - v * 165} stroke="#303541" /><text x="42" y={204 - v * 165} textAnchor="end">{(minimum + v * (maximum - minimum)).toPrecision(2)}</text></g>)}
+      {series.map(s => <polyline key={s.name} fill="none" stroke={s.color} strokeWidth="2.5" strokeDasharray={s.dashed ? "6 4" : undefined} points={s.values.map(([x, y]) => `${50 + 530 * x},${200 - 165 * (y - minimum) / (maximum - minimum)}`).join(" ")} />)}
       <text x="50" y="219">0</text><text x="580" y="219" textAnchor="end">1</text>
       <text x="315" y="238" textAnchor="middle">{xLabel}</text><text x="50" y="18">{yLabel}</text>
     </svg>
@@ -123,15 +132,23 @@ export default function CarbonizationLab() {
   }
   const d = view?.diagnostics;
   const selectedField = fields.find(f => f.index === fieldIndex)!;
-  const rows = view ? Array.from({ length: view.diagnostics.radialCells }, (_, i) => Array.from(view.fields.slice(i * 9, (i + 1) * 9))) : [];
+  const rows = view ? Array.from({ length: view.diagnostics.radialCells }, (_, i) => Array.from(view.fields.slice(i * stride, (i + 1) * stride))) : [];
   const currentProbe = rows[Math.min(probe, rows.length - 1)];
-  const profile = (v: View): [number, number][] => Array.from({ length: v.diagnostics.radialCells }, (_, i) => [v.fields[i * 9] / v.config.radiusM, v.fields[i * 9 + fieldIndex]]);
+  const profile = (v: View): [number, number][] => Array.from({ length: v.diagnostics.radialCells }, (_, i) => [v.fields[i * stride] / v.config.radiusM, v.fields[i * stride + fieldIndex]]);
   const duration = Math.max(d?.durationS ?? 1, baseline?.view.diagnostics.durationS ?? 1);
+  const plotValues = [...rows.map(r => r[fieldIndex]), ...(baseline ? profile(baseline.view).map(p => p[1]) : [])];
+  const minimum = Math.min(0, ...plotValues);
+  const maximum = Math.max(selectedField.max, ...plotValues);
+  const color = (value: number) => {
+    const t = Math.max(0, Math.min(1, (value - minimum) / (maximum - minimum)));
+    return `hsl(${265 - 215 * t} 75% ${24 + 40 * t}%)`;
+  };
+  const geometryScale = Math.max(1, (d?.currentRadiusM ?? 0) / (view?.config.radiusM ?? 1));
   const running = status === "running";
 
   return <main className={styles.lab}>
-    <header className={styles.heading}><div><p className={styles.eyebrow}>CARBONIZATION LAB · STAGE 1</p><h1>Inside the transforming strut</h1><p>Follow precursor, char and escaping products through a furnace schedule.</p></div><a href="/lab">← Printing & development</a></header>
-    <div className={styles.scope}><strong>Radial chemistry benchmark · uncalibrated demonstration material</strong><p>Prescribed specimen temperature, inert atmosphere and a fixed cylindrical reference geometry with sealed ends. Network order is a structural surrogate, not an sp² percentage. Natural volume is a material-law output; deformation, stress and furnace pressure are not solved here.</p></div>
+    <header className={styles.heading}><div><p className={styles.eyebrow}>CARBONIZATION LAB · ELASTIC STRUT</p><h1>Inside the transforming strut</h1><p>Follow material transformation, contraction and constraint stress through a furnace schedule.</p></div><a href="/lab">← Printing & development</a></header>
+    <div className={styles.scope}><strong>Coupled long-cylinder benchmark · uncalibrated demonstration material</strong><p>Prescribed uniform specimen temperature and inert atmosphere, with sealed ends. Solve radial deformation and a uniform axial stretch; natural volume and actual volume are distinct. Network order is a structural surrogate, not an sp² percentage. This elastic long-cylinder reduction excludes end effects, bending, buckling, relaxation, gas pressure and whole-Benchy mechanics.</p></div>
     {error && <div role="alert" className={styles.error}>{error}</div>}
     <div className={styles.layout}>
       <aside className={styles.panel}>
@@ -142,6 +159,18 @@ export default function CarbonizationLab() {
             <label>Reference length (µm)<input type="number" min="0.01" max="1000000" value={config.lengthM * 1e6} onChange={e => setConfig({ ...config, lengthM: e.target.valueAsNumber * 1e-6 })} /></label>
             <label>Radial cells<select value={config.radialCells} onChange={e => setConfig({ ...config, radialCells: Number(e.target.value) })}>{[16, 32, 64, 128, 256].map(n => <option key={n}>{n}</option>)}</select></label>
             <p className={styles.note}>Independent synthetic cylinder. It is not a sampled strut from the Benchy. End and junction effects are outside this reduction.</p>
+            <h3>Mechanics & supports</h3>
+            <label>Geometry model<select value={config.mechanics.enabled ? "coupled" : "fixed"} onChange={e => setConfig({ ...config, mechanics: { ...config.mechanics, enabled: e.target.value === "coupled" } })}><option value="coupled">Solved finite-strain deformation</option><option value="fixed">Fixed-reference transport control</option></select></label>
+            <fieldset disabled={!config.mechanics.enabled}>
+              <label>Axial boundary<select value={config.mechanics.axialBoundary} onChange={e => setConfig({ ...config, mechanics: { ...config.mechanics, axialBoundary: e.target.value as PyrolysisConfig["mechanics"]["axialBoundary"] } })}><option value="free">Force-free</option><option value="prescribed">Prescribed anchor separation</option><option value="compliant">Compliant axial spring</option></select></label>
+              {config.mechanics.axialBoundary !== "free" && <label>Final anchor separation / initial length<input type="number" min="0.2" max="2" step="0.05" value={config.mechanics.finalAnchorStretch} onChange={e => setConfig({ ...config, mechanics: { ...config.mechanics, finalAnchorStretch: e.target.valueAsNumber } })} /></label>}
+              {config.mechanics.axialBoundary === "compliant" && <label>Axial spring stiffness (N/m)<input type="number" min="0" max="1000000" step="1" value={config.mechanics.axialStiffnessNM} onChange={e => setConfig({ ...config, mechanics: { ...config.mechanics, axialStiffnessNM: e.target.valueAsNumber } })} /></label>}
+              <label>Shear modulus (MPa)<input type="number" min="0.000001" max="1000000" value={config.mechanics.shearModulusPa / 1e6} onChange={e => setConfig({ ...config, mechanics: { ...config.mechanics, shearModulusPa: e.target.valueAsNumber * 1e6 } })} /></label>
+              <label>Poisson ratio<input type="number" min="0" max="0.45" step="0.05" value={config.mechanics.poissonRatio} onChange={e => setConfig({ ...config, mechanics: { ...config.mechanics, poissonRatio: e.target.valueAsNumber } })} /></label>
+              <label>Thermal expansion (1/K)<input type="number" min="0" max="0.0005" step="0.00001" value={config.mechanics.thermalExpansionPerK} onChange={e => setConfig({ ...config, mechanics: { ...config.mechanics, thermalExpansionPerK: e.target.valueAsNumber } })} /></label>
+              <label>Hypothetical axial anisotropy<input type="number" min="-1" max="1" step="0.1" value={config.mechanics.axialAnisotropy} onChange={e => setConfig({ ...config, mechanics: { ...config.mechanics, axialAnisotropy: e.target.valueAsNumber } })} /></label>
+            </fieldset>
+            <p className={styles.note}>The outer surface is traction-free. Anchors move linearly from the initial separation over the whole schedule. An axial constraint is not a bonded end-face model. Modulus is constant; relaxation is not modeled.</p>
             <h3>Temperature waypoints</h3>
             <div className={styles.waypointLabels}><span>Time (min)</span><span>Specimen (°C)</span></div>
             {config.schedule.map((point, i) => <div className={styles.waypoint} key={i}>
@@ -170,7 +199,7 @@ export default function CarbonizationLab() {
       </aside>
       <section className={styles.results} aria-label="Carbonization results">
         <div className={styles.panel}>
-          <div className={styles.resultHeader}><h2>Material-reference section</h2><span className={styles.badge} role="status">{initialized ? status : "initializing"}</span></div>
+          <div className={styles.resultHeader}><h2>Solved section & material profiles</h2><span className={styles.badge} role="status">{initialized ? status : "initializing"}</span></div>
           <label>Inspect field<select value={fieldIndex} onChange={e => setFieldIndex(Number(e.target.value))}>{fields.map(f => <option key={f.index} value={f.index}>{f.label}</option>)}</select></label>
           {view && d ? <>
             <div className={styles.metrics}>
@@ -178,22 +207,27 @@ export default function CarbonizationLab() {
               <div><span>Specimen temperature</span><strong>{(d.specimenTemperatureK - 273.15).toFixed(1)} °C</strong></div>
               <div><span>Solid retained</span><strong>{percent((d.precursorMassKg + d.charMassKg) / d.initialMassKg)}</strong></div>
               <div><span>Products escaped</span><strong>{percent(d.escapedMassKg / d.initialMassKg)}</strong></div>
+              <div><span>Current diameter</span><strong>{(2 * d.currentRadiusM * 1e6).toPrecision(4)} µm</strong></div>
+              <div><span>Current length</span><strong>{(d.currentLengthM * 1e6).toPrecision(4)} µm</strong></div>
+              <div><span>Diameter shrinkage</span><strong>{percent(1 - d.currentRadiusM / view.config.radiusM)}</strong></div>
+              <div><span>Length shrinkage</span><strong>{percent(1 - d.currentLengthM / view.config.lengthM)}</strong></div>
             </div>
             <progress value={d.timeS} max={d.durationS} aria-label="Heating schedule progress" />
             <div className={styles.profile}>
-              <svg viewBox="0 0 220 240" role="img" aria-label={`${selectedField.label} across the fixed-reference circular section`}>
-                <title>Reference section; no geometry deformation</title>
-                {[...rows].reverse().map((row, j) => <circle key={j} cx="110" cy="110" r={100 * (rows.length - j) / rows.length} fill={`hsl(${265 - 215 * Math.min(1, row[fieldIndex] / selectedField.max)} 75% ${24 + 40 * Math.min(1, row[fieldIndex] / selectedField.max)}%)`} />)}
-                <circle cx="110" cy="110" r={100 * (Math.min(probe, rows.length - 1) + 0.5) / rows.length} fill="none" stroke="white" strokeWidth="1.5" strokeDasharray="3 3" />
-                <text x="110" y="235" textAnchor="middle" fill="#cbd0de">Fixed reference · R = {(view.config.radiusM * 1e6).toPrecision(3)} µm</text>
+              <svg viewBox="0 0 220 240" role="img" aria-label={`${selectedField.label} across the current circular section`}>
+                <title>Current section from Rust deformation; dashed outline is the dry reference</title>
+                {[...rows].reverse().map((row, j) => <circle key={j} cx="110" cy="110" r={100 * row[18] / view.config.radiusM / geometryScale} fill={color(row[fieldIndex])} />)}
+                <circle cx="110" cy="110" r={100 * (currentProbe?.[9] ?? 0) / view.config.radiusM / geometryScale} fill="none" stroke="white" strokeWidth="1.5" strokeDasharray="3 3" />
+                <circle cx="110" cy="110" r={100 / geometryScale} fill="none" stroke="#9ba2b5" strokeDasharray="5 4" />
+                <text x="110" y="235" textAnchor="middle" fill="#cbd0de">Current R = {(d.currentRadiusM * 1e6).toPrecision(3)} µm</text>
               </svg>
-              <Chart label={`${selectedField.label} radial profile`} xLabel="Material radius / reference radius" yLabel={selectedField.unit} maximum={Math.max(selectedField.max, ...rows.map(r => r[fieldIndex]))} series={[
+              <Chart label={`${selectedField.label} radial profile`} xLabel="Material radius / reference radius" yLabel={selectedField.unit} maximum={maximum} minimum={minimum} series={[
                 { name: "Current", color: "#b9a0ff", values: profile(view) },
                 ...(baseline ? [{ name: "Comparison", color: "#ffbe70", values: profile(baseline.view), dashed: true }] : []),
               ]} />
             </div>
             <label>Material probe · annulus {Math.min(probe, rows.length - 1) + 1} / {rows.length}<input type="range" min="0" max={rows.length - 1} value={Math.min(probe, rows.length - 1)} onChange={e => setProbe(Number(e.target.value))} /></label>
-            {currentProbe && <div className={styles.probe}><span>r = {(currentProbe[0] * 1e6).toPrecision(4)} µm</span><strong>{selectedField.label}: {currentProbe[fieldIndex].toPrecision(5)}</strong><span>{selectedField.unit}</span></div>}
+            {currentProbe && <div className={styles.probe}><span>Reference R = {(currentProbe[0] * 1e6).toPrecision(4)} µm · current r = {(currentProbe[9] * 1e6).toPrecision(4)} µm</span><strong>{selectedField.label}: {currentProbe[fieldIndex].toPrecision(5)}</strong><span>{selectedField.unit}</span></div>}
           </> : <div className={styles.empty}>Set a schedule and run the benchmark to inspect the authoritative radial state.</div>}
         </div>
         {view && d && <div className={styles.panel}>
@@ -207,6 +241,10 @@ export default function CarbonizationLab() {
           <dl className={styles.diagnostics}>
             <div><dt>Initial dry mass</dt><dd>{(d.initialMassKg * 1e15).toPrecision(5)} pg</dd></div>
             <div><dt>Char / initial mass</dt><dd>{percent(d.charMassKg / d.initialMassKg)}</dd></div>
+            <div><dt>Actual volume / dry volume</dt><dd>{d.volumeRatio.toPrecision(5)}</dd></div>
+            <div><dt>Axial specimen force (tension positive)</dt><dd>{(d.axialForceN * 1e6).toPrecision(5)} µN</dd></div>
+            <div><dt>Normalized equilibrium residual</dt><dd>{d.mechanicalResidual.toExponential(2)}</dd></div>
+            <div><dt>Geometry model</dt><dd>{view.config.mechanics.enabled ? "Coupled elastic cylinder" : "Fixed-reference control"}</dd></div>
             <div><dt>Mass balance error</dt><dd>{d.relativeMassError.toExponential(2)}</dd></div>
             <div><dt>Accepted / rejected increments</dt><dd>{d.acceptedSteps} / {d.rejectedSteps}</dd></div>
             <div><dt>Estimated peak solver memory</dt><dd>{(d.estimatedPeakBytes / 1024).toFixed(0)} KiB</dd></div>
@@ -221,7 +259,7 @@ export default function CarbonizationLab() {
           {baseline && <p className={styles.note}>Pinned run: R = {(baseline.view.config.radiusM * 1e6).toPrecision(3)} µm, {baseline.view.diagnostics.radialCells} cells, accepted time {(baseline.view.diagnostics.timeS / 60).toFixed(2)} min. Profiles compare normalized reference radius.</p>}
           <p className={styles.note}>Charts sample accepted snapshots. Export a checkpoint to preserve the full radial state, configuration and adaptive timestep for deterministic continuation. Pinning a comparison lasts for this page session.</p>
         </div>}
-        <div className={styles.panel}><h2>From developed polymer to carbon</h2><p>The printing lab can export an audited, full-resolution dry specimen with its preparation assumptions, mass ledger and connected fragments. This radial benchmark uses its own synthetic cylinder. Whole-object transport and finite-strain mechanics are the next gated stage.</p><a href="/lab">Open printing & development →</a></div>
+        <div className={styles.panel}><h2>From developed polymer to carbon</h2><p>The printing lab can export an audited, full-resolution dry specimen with its preparation assumptions, mass ledger and connected fragments. This radial benchmark uses its own synthetic cylinder. The current mechanics solve is restricted to the long cylinder. Small-3D verification, relaxation and whole-object mechanics remain subsequent gates.</p><a href="/lab">Open printing & development →</a></div>
       </section>
     </div>
   </main>;

@@ -30,9 +30,11 @@ path to deterministic reaction–diffusion polymerization and development.
   off-target polymer, connected fragments, preparation assumptions and mass ledger
 
 The Carbonization Lab implements the first chemistry/transport gate of the
-pyrolysis plan. It uses a hypothetical material and a fixed reference cylinder;
-finite-strain deformation, stresses and whole-Benchy carbonization are not yet
-implemented. See [model equations, verification and remaining gates](docs/CARBONIZATION_IMPLEMENTATION.md).
+pyrolysis plan. It uses a hypothetical material and a long-cylinder reduction;
+its version-2 extension solves elastic finite-strain radial deformation, axial
+constraints and moving-geometry transport. Whole-Benchy mechanics and relaxation
+remain unimplemented. See [mechanics equations and verification](docs/CARBONIZATION_MECHANICS.md)
+and the [stage-1 chemistry/specimen model](docs/CARBONIZATION_IMPLEMENTATION.md).
 
 The 3D viewport and the Reaction Lens are two views of the same numerical
 volume. The lens is an XY section at the layer selected by the shared section
@@ -226,15 +228,16 @@ a commercial photoresist.
   two-photon `I²` weights cached for under-resolved focal cells. An adjustable
   photoinitiator peak applies a normalized Gaussian spectral response with a
   fixed 160 nm FWHM; it is not a fitted material spectrum. Thermal
-  effects in the printed volume, solved shrinkage/stress, and experimentally
+  effects and solved shrinkage/stress in the full printed volume, and experimentally
   calibrated development kinetics remain outside the implemented scope.
 - Developer ingress uses deterministic distance from bath-accessible specimen
   surfaces rather than a fluid-flow or moving-interface solve.
 
 The recommended next milestone is **validated arbitrary-mesh import and
 experimental calibration against a named resin/process dataset**.
-For carbonization, the next gate is verified axisymmetric and small-3D
-finite-strain mechanics before integrating deformed whole-object geometry.
+For carbonization, elastic generalized-plane-strain mechanics is implemented.
+The next gates are small-3D validation, relaxation and finite support/interface
+models before integrating deformed whole-object geometry.
 
 ## Repository map
 

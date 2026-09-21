@@ -1,5 +1,7 @@
 # Carbonization implementation: specimen handoff and radial core
 
+> Historical stage-1 model description. The current application extends this with solved elastic cylinder mechanics and moving-geometry transport; see [the version-2 mechanics contract](CARBONIZATION_MECHANICS.md). Fixed-reference mode remains available as a control. The stage-1 statements below describe PR #10, not the default version-2 run.
+
 This implements the first chemistry/transport gate of [PR #8's plan](PYROLYSIS_CARBONIZATION_PLAN.md). The browser entry is `/carbonization`. It is an independent, synthetic long-cylinder benchmark, **not a deformed Benchy or a coupled mechanical simulation**. All material constants are hypothetical and uncalibrated. No commercial-resin, elemental-carbon, sp², stress, pressure or experimentally accurate dimension prediction is made.
 
 ## Implemented boundary
