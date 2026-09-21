@@ -40,7 +40,9 @@ Solve conservative transport through the current geometry, or through an exactly
 
 Transport can produce different surface and interior histories even when temperature is prescribed uniformly. Do not paint a fixed shell or apply a universal radius-dependent reaction multiplier. Serles et al. [S1] report diameter-dependent internal bonding differences, but their endpoint measurements do not uniquely identify the transient reaction and diffusion laws.
 
-**User experiment:** vary precursor strut diameter, initial printing state, diffusivity and ramp profile, then inspect computed radial/3D concentration gradients and escaped-mass curves.
+**Baseline volatile-feedback contract:** the first material profile uses one-way chemistry → mobile-product coupling unless a profile explicitly enables and defines volatile-to-solid feedback. A gradient in retained mobile products does not by itself imply a gradient in precursor conversion, char yield or carbon-network state. For a homogeneous precursor at prescribed uniform temperature with rates independent of mobile-product concentration, the solid reaction history must remain spatially homogeneous even when mobile-product concentration and escape flux are not. Any profile that lets retained products alter solid evolution must name the closure (for example secondary-char formation or product-dependent rates), its parameters, calibration status and limiting behavior. Verification must include a no-feedback homogeneous-solid control plus conservation and spatial/time-convergence tests for every enabled feedback closure.
+
+**User experiment:** vary precursor strut diameter, initial printing state, diffusivity and ramp profile, then inspect computed radial/3D concentration gradients and escaped-mass curves. Distinguish mobile-product gradients from solid-state gradients and show which declared feedback, if any, couples them.
 
 ### 3. Evolving internal carbon material
 
