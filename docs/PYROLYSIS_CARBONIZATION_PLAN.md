@@ -153,6 +153,10 @@ At a common reference temperature:
 
 If unresolved pore volume is used, define its relation to bulk free density, for example `rho_free,ref = (1 - phi_micro) rho_skeleton,ref`. Thermal expansion belongs in `F_th`, not again in an expanded density in this closure. Avoid counting irreversible pore collapse in both density evolution and an independent volumetric viscous factor.
 
+**Fixed-topology admissibility contract:** every material profile must declare a strictly nonsingular validity domain before finite-strain mechanics is enabled. This includes positive lower bounds on retained-solid fraction, free bulk density and transformation Jacobian, and an upper bound on unresolved porosity strictly below one; additional constitutive bounds such as minimum usable stiffness may be required by the selected material law. These are profile/model validity limits, not universal physical constants.
+
+Evaluate those limits on each trial coupled increment before accepting the mechanical state. If a trial leaves the admissible domain, reject it, restore the last accepted state and reduce the increment when the timestep policy permits. If no admissible increment can advance, pause or terminate the run with a machine-readable material-state-out-of-domain diagnostic naming the violated quantity and bound. Do not silently manufacture residual mass, density or stiffness, clamp `J_py` to hide the singularity, or delete cells/elements while topology change remains outside scope. Zero/near-zero residue and limiting-porosity cases are mandatory verification tests for deterministic rejection, rollback and diagnostics.
+
 Actual current density follows `rho_actual = m_s / (det(F) V_0)`. Constraints can make actual and free volumes differ. Do not overwrite the solved Jacobian with `J_py`.
 
 Either fit directional free stretches and infer consistent free density, or fit mass/density and constrain the stretch product. As a mathematical example, stretches `(0.5, 0.5, 0.5)` and `(0.4, 0.5, 0.625)` both give `J_py = 0.125`; a volume measurement cannot distinguish them.
