@@ -4,6 +4,7 @@ import { absoluteUrl } from "./site-config";
 const pages = [
   { path: "/", changeFrequency: "weekly", priority: 1 },
   { path: "/lab", changeFrequency: "weekly", priority: 0.9 },
+  { path: "/carbonization", changeFrequency: "weekly", priority: 0.8 },
   { path: "/guides", changeFrequency: "weekly", priority: 0.9 },
   { path: "/guides/two-photon-lithography", changeFrequency: "monthly", priority: 0.9 },
   { path: "/guides/multiphoton-lithography", changeFrequency: "monthly", priority: 0.85 },

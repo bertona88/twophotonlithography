@@ -4339,3 +4339,10 @@ body:has(.seo-site) {
     transition-duration: 0.001ms !important;
   }
 }
+.dry-specimen-controls { border: 1px solid #393448; border-radius: 8px; padding: 14px; margin: 16px 0; }
+.dry-specimen-controls h3 { font-size: 14px; margin: 0 0 10px; }
+.dry-specimen-controls label { display: grid; gap: 6px; margin: 12px 0; font-size: 11px; color: #b0a7c3; }
+.dry-specimen-controls input { background: #171421; border: 1px solid #4a3e5a; border-radius: 4px; color: #ddd5eb; padding: 8px; width: 100%; }
+.dry-specimen-controls button { border: 1px solid #695180; border-radius: 5px; background: #2e243c; color: #e2d6f4; padding: 10px; cursor: pointer; }
+.dry-specimen-controls button:disabled { opacity: .45; cursor: default; }
+.dry-specimen-controls a { display: block; color: #c8aff4; font-size: 12px; margin-top: 16px; }

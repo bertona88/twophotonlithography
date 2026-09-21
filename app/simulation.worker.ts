@@ -57,7 +57,8 @@ type Incoming =
   | { type: "pause" }
   | { type: "resume" }
   | { type: "reset" }
-  | { type: "develop" };
+  | { type: "develop" }
+  | { type: "exportDrySpecimen"; dryDensityKgM3: number; minRemaining: number };
 
 const scope = self as unknown as {
   onmessage: ((event: MessageEvent<Incoming>) => void) | null;
@@ -747,6 +748,19 @@ function emitSliceInspection() {
 }
 
 function processMessage(message: Incoming) {
+  if (message.type === "exportDrySpecimen") {
+    if (stage !== "complete") throw new Error("Complete development before preparing a dry specimen");
+    const specimen = requireVolumeSimulation().prepare_dry_specimen({
+      dryPolymerDensityKgM3: message.dryDensityKgM3,
+      minConversion: params.gelPoint,
+      minRemaining: message.minRemaining,
+      memoryBudgetBytes: 256 * 1024 * 1024,
+    });
+    try {
+      post({ type: "drySpecimen", checkpoint: specimen.export_checkpoint(), ledger: specimen.get_ledger() });
+    } finally { specimen.free(); }
+    return;
+  }
   if (message.type === "previewOptics") {
     const preview = preview_volume_psf(
       message.na,

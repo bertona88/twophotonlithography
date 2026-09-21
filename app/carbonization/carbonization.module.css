@@ -1,0 +1,48 @@
+.lab { max-width: 1440px; margin: 0 auto; padding: 42px 28px 70px; color: #e6e5ec; }
+.heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 24px; }
+.heading h1 { font-size: clamp(1.8rem, 3.5vw, 3.2rem); letter-spacing: -.045em; margin: 8px 0 12px; }
+.heading p, .panel p { color: #a8a9b9; line-height: 1.6; }
+.lab a { color: #c3afff; }
+.eyebrow { font-size: 11px; letter-spacing: .16em; color: #baa2fc !important; }
+.scope { border: 1px solid #454052; border-left: 3px solid #a78bea; background: #17151d; padding: 18px 22px; border-radius: 10px; margin-bottom: 26px; }
+.scope p { color: #b4afc1; font-size: 13px; line-height: 1.6; margin: 8px 0 0; }
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; align-items: start; }
+.panel { padding: 24px; background: #101219; border: 1px solid #2b2b38; border-radius: 14px; min-width: 0; }
+.panel h2 { font-size: 18px; margin: 0 0 22px; }
+.panel h3 { font-size: 14px; margin: 22px 0 12px; }
+.panel fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.panel label { display: grid; gap: 8px; font-size: 12px; color: #bfc0cd; margin: 14px 0; }
+.panel input:not([type=range]), .panel select { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px; background: #1c1d29; color: #f0edf8; border: 1px solid #3a394c; border-radius: 6px; font: inherit; }
+.panel input[type=range] { width: 100%; accent-color: #b79afc; }
+.panel button { padding: 9px 12px; background: #272331; border: 1px solid #514760; border-radius: 6px; color: #e8e0f8; font-size: 12px; cursor: pointer; }
+.panel button.primary { background: #bca3f8; color: #17121f; border-color: #bca3f8; font-weight: 650; width: 100%; padding: 13px; }
+.panel :disabled { opacity: .45; cursor: default; }
+.panel :focus-visible { outline: 2px solid #d5c5ff; outline-offset: 3px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.note { font-size: 11px; line-height: 1.6; }
+.waypoint, .waypointLabels { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+.waypointLabels { font-size: 11px; color: #9093a8; }
+.panel summary { color: #c6b0fb; font-size: 12px; cursor: pointer; padding: 8px 0; }
+.results { display: grid; gap: 24px; min-width: 0; }
+.resultHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.badge { border: 1px solid #4a415b; border-radius: 12px; font-size: 11px; padding: 4px 10px; color: #c8b2ff; margin-bottom: 22px; }
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 24px 0; }
+.metrics span { display: block; color: #9798aa; font-size: 11px; margin-bottom: 8px; }
+.metrics strong { font-size: 19px; font-weight: 500; }
+.panel progress { width: 100%; height: 5px; accent-color: #b69af4; }
+.profile { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(0, 2.7fr); gap: 12px; margin: 20px 0; align-items: center; }
+.profile > svg { width: 100%; font-size: 11px; }
+.chart svg { display: block; width: 100%; }
+.chart text { fill: #a9abba; font-size: 11px; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; padding: 8px 0; color: #acaaba; font-size: 11px; }
+.legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+.probe { display: flex; gap: 12px; flex-wrap: wrap; background: #1a1924; padding: 14px; border-radius: 6px; font-size: 12px; color: #b7b0c8; }
+.probe strong { color: #e6ddfa; font-weight: 500; }
+.diagnostics { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 24px 0; }
+.diagnostics dt { color: #8f91a6; font-size: 11px; margin-bottom: 5px; }
+.diagnostics dd { margin: 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+.empty { display: grid; place-items: center; min-height: 300px; color: #9090a5; text-align: center; padding: 30px; line-height: 1.6; }
+.error { padding: 16px; border: 1px solid #a75361; border-radius: 8px; background: #2b1621; color: #ffd3dd; margin-bottom: 20px; overflow-wrap: anywhere; }
+.file input { font-size: 11px !important; }
+@media (max-width: 1000px) { .layout { grid-template-columns: 260px minmax(0, 1fr); gap: 16px; } .metrics { grid-template-columns: 1fr 1fr; } .panel { padding: 18px; } .profile { grid-template-columns: 1fr; } .profile > svg { max-width: 190px; margin: 0 auto; } }
+@media (max-width: 700px) { .lab { padding: 24px 16px 45px; } .heading { display: block; } .heading > a { display: inline-block; margin-top: 16px; } .layout { grid-template-columns: 1fr; } .diagnostics { grid-template-columns: 1fr 1fr; } }

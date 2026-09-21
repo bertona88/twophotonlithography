@@ -2,6 +2,29 @@
 /* eslint-disable */
 
 /**
+ * Owns full-resolution Rust state independently of subsequent exposure/reset.
+ */
+export class DevelopedSpecimenHandle {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    export_checkpoint(): any;
+    get_ledger(): any;
+}
+
+export class PyrolysisSimulation {
+    free(): void;
+    [Symbol.dispose](): void;
+    advance(): boolean;
+    export_checkpoint(): any;
+    get_diagnostics(): any;
+    get_snapshot(): number;
+    constructor(config: any);
+    static restore(checkpoint: any): PyrolysisSimulation;
+    snapshot_len(): number;
+}
+
+/**
  * JavaScript-facing owner of the adaptive dense 3D resin volume.
  */
 export class WholeVolumeSimulation {
@@ -30,6 +53,7 @@ export class WholeVolumeSimulation {
     get_xy_slice(z_um: number): number;
     layer_positions_len(): number;
     constructor(config: any, occupancy: Uint8Array);
+    prepare_dry_specimen(policy: any): DevelopedSpecimenHandle;
     reset(): void;
     scan_path_len(): number;
     set_parameters(parameters: any): void;
@@ -46,6 +70,8 @@ export class WholeVolumeSimulation {
  */
 export function preview_volume_psf(na: number, wavelength_nm: number, memory_budget_bytes: number): any;
 
+export function pyrolysis_defaults(): any;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -55,6 +81,7 @@ export interface InitOutput {
     readonly wholevolumesimulation_new: (a: number, b: number, c: number, d: number) => void;
     readonly wholevolumesimulation_set_parameters: (a: number, b: number, c: number) => void;
     readonly wholevolumesimulation_reset: (a: number) => void;
+    readonly wholevolumesimulation_prepare_dry_specimen: (a: number, b: number, c: number) => void;
     readonly wholevolumesimulation_advance_exposure_steps: (a: number, b: number) => number;
     readonly wholevolumesimulation_advance_development_steps: (a: number, b: number) => number;
     readonly wholevolumesimulation_get_snapshot: (a: number) => number;
@@ -73,10 +100,23 @@ export interface InitOutput {
     readonly wholevolumesimulation_development_progress: (a: number) => number;
     readonly wholevolumesimulation_get_diagnostics: (a: number, b: number) => void;
     readonly wholevolumesimulation_get_cached_diagnostics: (a: number, b: number) => void;
+    readonly __wbg_developedspecimenhandle_free: (a: number, b: number) => void;
+    readonly developedspecimenhandle_get_ledger: (a: number, b: number) => void;
+    readonly developedspecimenhandle_export_checkpoint: (a: number, b: number) => void;
+    readonly pyrolysis_defaults: (a: number) => void;
+    readonly __wbg_pyrolysissimulation_free: (a: number, b: number) => void;
+    readonly pyrolysissimulation_new: (a: number, b: number) => void;
+    readonly pyrolysissimulation_restore: (a: number, b: number) => void;
+    readonly pyrolysissimulation_advance: (a: number) => number;
+    readonly pyrolysissimulation_get_snapshot: (a: number) => number;
+    readonly pyrolysissimulation_snapshot_len: (a: number) => number;
+    readonly pyrolysissimulation_get_diagnostics: (a: number, b: number) => void;
+    readonly pyrolysissimulation_export_checkpoint: (a: number, b: number) => void;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_export3: (a: number) => void;
     readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
-    readonly __wbindgen_export3: (a: number, b: number, c: number) => void;
+    readonly __wbindgen_export4: (a: number, b: number, c: number) => void;
 }
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;

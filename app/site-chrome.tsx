@@ -41,6 +41,7 @@ export function SiteHeader() {
         </span>
       </Link>
       <nav className="site-links" aria-label="Primary navigation">
+        <a href="/carbonization">Carbonization</a>
         <a href="/guides">Guides</a>
         <a href="/method">Model</a>
         <a className="site-launch" href="/lab">

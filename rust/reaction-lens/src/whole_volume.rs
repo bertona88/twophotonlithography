@@ -723,6 +723,36 @@ impl WholeVolumeSimulation {
         count
     }
 
+    pub fn prepare_dry_specimen(
+        &self,
+        policy: crate::pyrolysis::specimen::PreparationPolicy,
+    ) -> crate::pyrolysis::Result<crate::pyrolysis::specimen::DevelopedSpecimen> {
+        use crate::pyrolysis::specimen::{prepare, PreparationInput};
+        if self.development_step != self.development_steps_total {
+            return Err(crate::pyrolysis::invalid(
+                "complete development before preparing a dry specimen",
+            ));
+        }
+        prepare(
+            PreparationInput {
+                dims: self.dims,
+                origin_um: self.origin_um,
+                pitch_um: self.pitch_um,
+                source_checksum: calculate_dynamic_diagnostics(self).checksum,
+                parameters: &self.parameters,
+                source_memory_bytes: self.cached_diagnostics().owned_memory_bytes,
+                occupancy: &self.occupancy,
+                active: &self.active,
+                conversion: &self.conversion,
+                remaining: &self.remaining,
+                photoinitiator: &self.photoinitiator,
+                oxygen: &self.oxygen,
+                radicals: &self.radicals,
+            },
+            policy,
+        )
+    }
+
     fn advance_developer_at(&mut self, index: usize, depth_um: f64, dt: f64) {
         let ingress_rate = 0.22 / (depth_um * depth_um + 0.04);
         self.developer_integral[index] += (ingress_rate * dt) as f32;

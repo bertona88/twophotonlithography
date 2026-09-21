@@ -5,6 +5,7 @@
 //! Wasm render and XY-slice snapshots never alias authoritative state arrays.
 
 mod parameters;
+pub mod pyrolysis;
 mod simulation;
 mod whole_volume;
 

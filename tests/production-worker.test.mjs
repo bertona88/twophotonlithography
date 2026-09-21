@@ -438,6 +438,28 @@ test("production worker initializes browser Wasm and honors its message contract
       developed.volumeDiagnostics.offTargetSurvivingFraction,
     );
 
+    const prepared = await postAndWait(
+      worker,
+      { type: "exportDrySpecimen", dryDensityKgM3: 1200, minRemaining: 0.01 },
+      message => message.type === "drySpecimen" || (message.type === "commandError" && message.command === "exportDrySpecimen"),
+      "a full-resolution developed specimen",
+    );
+    assert.equal(prepared.type, "drySpecimen", prepared.message);
+    const specimen = prepared.checkpoint;
+    assert.equal(specimen.schemaVersion, 1);
+    assert.equal(specimen.sourceChecksum, developed.volumeDiagnostics.checksum);
+    assert.equal(specimen.cells.length, specimen.ledger.selectedCells);
+    assert.ok(specimen.cells.length > 0);
+    assert.ok(specimen.ledger.offTargetDryMassKg > 0);
+    assert.ok(specimen.ledger.components > 0);
+    assert.ok(Math.abs(specimen.ledger.relativeBalanceError) < 1e-10);
+    assert.deepEqual(specimen.pitchM, developed.volumeDiagnostics.voxelPitchUm.map(value => value * 1e-6));
+    const cellVolume = specimen.pitchM.reduce((v, x) => v * x, 1);
+    for (const cell of specimen.cells) {
+      assert.ok(Math.abs(cell.dryMassKg / (1200 * cellVolume * cell.remaining * cell.conversion) - 1) < 1e-12);
+    }
+    const retainedMass = specimen.ledger.dryPolymerMassKg;
+
     const reset = await postAndWait(
       worker,
       { type: "reset" },
@@ -449,6 +471,13 @@ test("production worker initializes browser Wasm and honors its message contract
       "a reset snapshot",
     );
     assert.equal(reset.metrics.checksum, configuredSnapshot.metrics.checksum);
+    assert.equal(specimen.ledger.dryPolymerMassKg, retainedMass);
+    const premature = await postAndWait(worker,
+      { type: "exportDrySpecimen", dryDensityKgM3: 1200, minRemaining: 0.01 },
+      message => message.type === "commandError" && message.command === "exportDrySpecimen",
+      "rejection of an undeveloped source",
+    );
+    assert.match(premature.message, /complete development/i);
   } finally {
     await worker.terminate();
   }
