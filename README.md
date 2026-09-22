@@ -22,6 +22,23 @@ path to deterministic reaction–diffusion polymerization and development.
 - Deterministic A/B replay for any changed model parameter
 - Runtime diagnostics that identify the solver, grid, timestep, simulated model
   time, update rate, checksum, and Wasm memory use
+- A `/carbonization` BCC foam benchmark on a rigid substrate, with connected
+  3D finite-strain mechanics, stress relaxation, conservative volatile transport,
+  spatial sections, material probes, free/bonded comparison and checkpoint replay
+- An independent radial cylinder reference at `/carbonization/strut`, with
+  SI-unit heating schedules, precursor/char/mobile-product kinetics and escape,
+  evolving network-order/density state and axial support controls
+- Audited full-resolution dry-specimen export after development, including
+  off-target polymer, connected fragments, preparation assumptions and mass ledger
+
+The Carbonization Lab solves an explicitly bounded BCC continuum benchmark with
+hypothetical, uncalibrated material constants. Its rigid substrate fixes the
+bonded polymer footprint; the free control removes that constraint. A tetrahedral
+finite-element mesh owns the deformation and internal fields displayed in the
+browser. The original cylinder remains a separate reference. See the
+[BCC formulation, numerical checks and limitations](docs/BCC_CARBONIZATION.md),
+[cylinder mechanics](docs/CARBONIZATION_MECHANICS.md) and
+[dry-specimen handoff](docs/CARBONIZATION_IMPLEMENTATION.md).
 
 The 3D viewport and the Reaction Lens are two views of the same numerical
 volume. The lens is an XY section at the layer selected by the shared section
@@ -207,19 +224,27 @@ a commercial photoresist.
   not implemented yet.
 - The seed is explicit replay metadata, but the preserved model currently has
   no stochastic term; equal inputs are deterministic without injected noise.
-- Time is nondimensional, and parameters are not fitted to a particular resin.
+- Exposure/development time is nondimensional, and parameters are not fitted to
+  a particular resin. The independent carbonization benchmark uses seconds and
+  prescribed specimen temperature; it does not calibrate the upstream clock.
 - The whole-volume optical kernel is a circular-polarization vectorial Debye
   integral normalized to fixed specimen power, with adaptively volume-averaged
   two-photon `I²` weights cached for under-resolved focal cells. An adjustable
   photoinitiator peak applies a normalized Gaussian spectral response with a
   fixed 160 nm FWHM; it is not a fitted material spectrum. Thermal
-  effects, shrinkage, stress, and experimentally calibrated development
-  kinetics remain outside scope.
+  effects and solved shrinkage/stress in the full printed volume, and experimentally
+  calibrated development kinetics remain outside the implemented scope.
 - Developer ingress uses deterministic distance from bath-accessible specimen
   surfaces rather than a fluid-flow or moving-interface solve.
 
 The recommended next milestone is **validated arbitrary-mesh import and
 experimental calibration against a named resin/process dataset**.
+Carbonization now includes finite-strain 3D BCC mechanics with isochoric Maxwell
+relaxation and a rigid bonded substrate. Compliant or transforming substrate
+bodies, failure/debonding, arbitrary developed-object import and named-material
+experimental calibration remain research extensions. Mesh sensitivity and the
+gas-transport positivity limiter are reported explicitly; numerical verification
+does not establish experimental accuracy.
 
 ## Repository map
 
@@ -230,6 +255,13 @@ experimental calibration against a named resin/process dataset**.
 - `app/lab-viewport.tsx` — client-only Three.js viewport
 - `app/simulation.worker.ts` — Wasm initialization, authoritative volume
   scheduling, selected-plane extraction, and immutable snapshot transfer
+- `app/carbonization/`, `app/bcc.worker.ts` — BCC/substrate controls, solved
+  3D geometry and sections, and Rust/Wasm worker scheduling
+- `app/pyrolysis.worker.ts` — independent radial cylinder worker
+- `rust/reaction-lens/src/bcc/` — connected BCC mesh, finite-strain viscoelastic
+  mechanics, deformed-mesh nodal transport and independent verification
+- `rust/reaction-lens/src/pyrolysis/` — dry specimen, schedule, chemistry,
+  network/density laws, conservative radial transport and checkpoint validation
 - `rust/reaction-lens/src/whole_volume.rs` — dense 3D resin, vectorial PSF,
   scan timing, exposure chemistry, threshold conversion, and development
 - `rust/reaction-lens/` — authoritative 3D volume core, native parity reference,

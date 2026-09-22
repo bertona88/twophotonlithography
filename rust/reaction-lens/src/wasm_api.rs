@@ -46,6 +46,18 @@ impl WholeVolumeSimulation {
         self.inner.reset();
     }
 
+    pub fn prepare_dry_specimen(
+        &self,
+        policy: JsValue,
+    ) -> Result<DevelopedSpecimenHandle, JsValue> {
+        let policy = serde_wasm_bindgen::from_value(policy).map_err(validation_error)?;
+        let inner = self
+            .inner
+            .prepare_dry_specimen(policy)
+            .map_err(validation_error)?;
+        Ok(DevelopedSpecimenHandle { inner })
+    }
+
     pub fn advance_exposure_steps(&mut self, step_count: u32) -> u32 {
         self.inner.advance_exposure_steps(step_count)
     }
@@ -127,8 +139,110 @@ impl WholeVolumeSimulation {
     }
 }
 
+/// Owns full-resolution Rust state independently of subsequent exposure/reset.
+#[wasm_bindgen]
+pub struct DevelopedSpecimenHandle {
+    inner: crate::pyrolysis::specimen::DevelopedSpecimen,
+}
+
+#[wasm_bindgen]
+impl DevelopedSpecimenHandle {
+    pub fn get_ledger(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.inner.ledger).map_err(validation_error)
+    }
+    pub fn export_checkpoint(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.inner).map_err(validation_error)
+    }
+}
+
+#[wasm_bindgen]
+pub fn pyrolysis_defaults() -> Result<JsValue, JsValue> {
+    serde_wasm_bindgen::to_value(&crate::pyrolysis::RadialConfig::default())
+        .map_err(validation_error)
+}
+
+#[wasm_bindgen]
+pub struct PyrolysisSimulation {
+    inner: crate::pyrolysis::PyrolysisCore,
+}
+
+#[wasm_bindgen]
+impl PyrolysisSimulation {
+    #[wasm_bindgen(constructor)]
+    pub fn new(config: JsValue) -> Result<PyrolysisSimulation, JsValue> {
+        let config = serde_wasm_bindgen::from_value(config).map_err(validation_error)?;
+        Ok(Self {
+            inner: crate::pyrolysis::PyrolysisCore::new(config).map_err(validation_error)?,
+        })
+    }
+    pub fn restore(checkpoint: JsValue) -> Result<PyrolysisSimulation, JsValue> {
+        let checkpoint = serde_wasm_bindgen::from_value(checkpoint).map_err(validation_error)?;
+        Ok(Self {
+            inner: crate::pyrolysis::PyrolysisCore::from_checkpoint(checkpoint)
+                .map_err(validation_error)?,
+        })
+    }
+    pub fn advance(&mut self) -> bool {
+        self.inner.advance()
+    }
+    pub fn get_snapshot(&mut self) -> u32 {
+        self.inner.snapshot().as_ptr() as u32
+    }
+    pub fn snapshot_len(&self) -> u32 {
+        self.inner.snapshot_len() as u32
+    }
+    pub fn get_diagnostics(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.inner.diagnostics()).map_err(validation_error)
+    }
+    pub fn export_checkpoint(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.inner.checkpoint()).map_err(validation_error)
+    }
+}
+
 fn validation_error(error: impl std::fmt::Display) -> JsValue {
     js_error(error.to_string())
+}
+
+#[wasm_bindgen]
+pub fn bcc_defaults() -> Result<JsValue, JsValue> {
+    serde_wasm_bindgen::to_value(&crate::bcc::BccConfig::default()).map_err(validation_error)
+}
+
+#[wasm_bindgen]
+pub struct BccSimulation {
+    inner: crate::bcc::BccCore,
+}
+
+#[wasm_bindgen]
+impl BccSimulation {
+    pub fn accepted_steps(&self) -> u32 {
+        self.inner.accepted_steps()
+    }
+    #[wasm_bindgen(constructor)]
+    pub fn new(config: JsValue) -> Result<BccSimulation, JsValue> {
+        let config = serde_wasm_bindgen::from_value(config).map_err(validation_error)?;
+        Ok(Self {
+            inner: crate::bcc::BccCore::new(config).map_err(validation_error)?,
+        })
+    }
+    pub fn restore(checkpoint: JsValue) -> Result<BccSimulation, JsValue> {
+        let checkpoint = serde_wasm_bindgen::from_value(checkpoint).map_err(validation_error)?;
+        Ok(Self {
+            inner: crate::bcc::BccCore::from_checkpoint(checkpoint).map_err(validation_error)?,
+        })
+    }
+    pub fn advance(&mut self) -> bool {
+        self.inner.advance()
+    }
+    pub fn get_snapshot(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.inner.snapshot()).map_err(validation_error)
+    }
+    pub fn get_diagnostics(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.inner.diagnostics()).map_err(validation_error)
+    }
+    pub fn export_checkpoint(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.inner.checkpoint()).map_err(validation_error)
+    }
 }
 
 fn js_error(message: impl AsRef<str>) -> JsValue {

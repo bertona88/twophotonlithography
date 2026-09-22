@@ -18,6 +18,7 @@ import {
   nearestLayerIndex,
 } from "./layer-inspection";
 import { multipassPathProgress } from "./volume-visualization";
+import DrySpecimenControls from "./dry-specimen-controls";
 
 const LabViewport = dynamic(() => import("./lab-viewport"), {
   ssr: false,
@@ -1241,6 +1242,16 @@ export default function LabInterface({
         }
         return;
       }
+      if (message.type === "drySpecimen") {
+        const url = URL.createObjectURL(new Blob([JSON.stringify(message.checkpoint)], { type: "application/json" }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `developed-specimen-${message.checkpoint.sourceChecksum}.json`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        setNotice(`Dry specimen exported: ${message.ledger.selectedCells.toLocaleString()} full-resolution cells, ${message.ledger.components} connected fragments. Preparation assumptions and excluded mass are recorded in the checkpoint.`);
+        return;
+      }
       if (message.type === "sliceResult") {
         const nextLayerPositions = new Float32Array(message.layerPositions);
         setPathPositions(new Float32Array(message.pathPositions));
@@ -1930,6 +1941,11 @@ export default function LabInterface({
                   The mesh is voxelized once. Rust scans that occupancy through a
                   dense three-dimensional resin field; rendering never mutates it.
                 </p>
+                <DrySpecimenControls
+                  available={stage === "complete" && solverState === "ready"}
+                  gelPoint={params.gelPoint}
+                  onExport={(dryDensityKgM3, minRemaining) => workerRef.current?.postMessage({ type: "exportDrySpecimen", dryDensityKgM3, minRemaining })}
+                />
                 {displayVolumeDiagnostics && (
                   <>
                     <p className="sheet-note">Executed 3D Benchy volume diagnostics</p>
