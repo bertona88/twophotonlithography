@@ -91,4 +91,17 @@ Seventeen emitted-worker and rendered-HTML checks passed against the final resum
 
 Before the final optimizer-only resumability change, observed desktop UI checks covered material-field changes, material probing, keyboard camera control, the spatial section, reset, one accepted step, resume and pause. A short 90-second 25 → 300 → 25 °C schedule completed for the two-cell 0.15-radius/10-voxel benchmark under both support modes; reported peak von Mises stress was about 0.100 MPa bonded and 8.88e-13 MPa free. A 390 × 844 mobile viewport had no horizontal overflow and kept the specimen and substrate readable. The radial route and its return link loaded, and browser logs were empty during those checks. These observations establish the tested local UI behavior, not device-independent performance or a deployed result. The final rebuilt preview and live release require their own interaction readback.
 
-The final full-default emitted-worker result is being recorded separately below when that run completes. Deployment validation follows release; no successful deployment is asserted by this local validation record.
+A native release build completed the full default bonded schedule through 7,200 seconds with 5,979 nodes and 18,048 tetrahedra. This run preceded the optimizer iteration-slicing refactor and final iteration-limit boundary fix; its constitutive equations, transport, predictor, force tolerance and default configuration are the same. The later batch-equivalence and checkpoint tests above verify the refactored continuation semantics separately.
+
+| Full default native result | Value |
+| --- | ---: |
+| Current / initial solid volume | 0.1713902182 |
+| Final specimen bounding dimensions | 80 × 80 × 39.92482854 µm |
+| Normalized mechanical residual | 1.36e-6 |
+| Relative mass-ledger error | −1.38e-12 |
+| Steps using the transport limiter | 177 |
+| Minimum Galerkin blend weight | 0.0127498 |
+
+The unchanged 80 µm horizontal bounding dimensions include the fixed substrate footprint; they do not imply that the upper lattice stayed at its original width. Every accepted state passed the positive-Jacobian and mass checks. Limiting was substantial, so this result establishes a completed conservative benchmark, not spatially converged gas gradients. The measured native wall time was 175.5 seconds under concurrent host load; it is not a browser or mobile performance guarantee.
+
+Full-cycle evidence from the emitted canonical Linux Wasm/production worker and the final live interaction readback will be recorded with the release pull request and deployment task. Deployment validation follows release; no successful deployment is asserted by this local validation record.
