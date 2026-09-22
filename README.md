@@ -22,19 +22,23 @@ path to deterministic reaction–diffusion polymerization and development.
 - Deterministic A/B replay for any changed model parameter
 - Runtime diagnostics that identify the solver, grid, timestep, simulated model
   time, update rate, checksum, and Wasm memory use
-- An independent `/carbonization` radial benchmark with SI-unit heating
-  schedules, conservative precursor/char/mobile-product kinetics and escape,
-  evolving network-order/density state, pause/replay, probes, comparisons and
-  checkpoint export/import
+- A `/carbonization` BCC foam benchmark on a rigid substrate, with connected
+  3D finite-strain mechanics, stress relaxation, conservative volatile transport,
+  spatial sections, material probes, free/bonded comparison and checkpoint replay
+- An independent radial cylinder reference at `/carbonization/strut`, with
+  SI-unit heating schedules, precursor/char/mobile-product kinetics and escape,
+  evolving network-order/density state and axial support controls
 - Audited full-resolution dry-specimen export after development, including
   off-target polymer, connected fragments, preparation assumptions and mass ledger
 
-The Carbonization Lab implements the first chemistry/transport gate of the
-pyrolysis plan. It uses a hypothetical material and a long-cylinder reduction;
-its version-2 extension solves elastic finite-strain radial deformation, axial
-constraints and moving-geometry transport. Whole-Benchy mechanics and relaxation
-remain unimplemented. See [mechanics equations and verification](docs/CARBONIZATION_MECHANICS.md)
-and the [stage-1 chemistry/specimen model](docs/CARBONIZATION_IMPLEMENTATION.md).
+The Carbonization Lab solves an explicitly bounded BCC continuum benchmark with
+hypothetical, uncalibrated material constants. Its rigid substrate fixes the
+bonded polymer footprint; the free control removes that constraint. A tetrahedral
+finite-element mesh owns the deformation and internal fields displayed in the
+browser. The original cylinder remains a separate reference. See the
+[BCC formulation, numerical checks and limitations](docs/BCC_CARBONIZATION.md),
+[cylinder mechanics](docs/CARBONIZATION_MECHANICS.md) and
+[dry-specimen handoff](docs/CARBONIZATION_IMPLEMENTATION.md).
 
 The 3D viewport and the Reaction Lens are two views of the same numerical
 volume. The lens is an XY section at the layer selected by the shared section
@@ -235,9 +239,12 @@ a commercial photoresist.
 
 The recommended next milestone is **validated arbitrary-mesh import and
 experimental calibration against a named resin/process dataset**.
-For carbonization, elastic generalized-plane-strain mechanics is implemented.
-The next gates are small-3D validation, relaxation and finite support/interface
-models before integrating deformed whole-object geometry.
+Carbonization now includes finite-strain 3D BCC mechanics with isochoric Maxwell
+relaxation and a rigid bonded substrate. Compliant or transforming substrate
+bodies, failure/debonding, arbitrary developed-object import and named-material
+experimental calibration remain research extensions. Mesh sensitivity and the
+gas-transport positivity limiter are reported explicitly; numerical verification
+does not establish experimental accuracy.
 
 ## Repository map
 
@@ -248,8 +255,11 @@ models before integrating deformed whole-object geometry.
 - `app/lab-viewport.tsx` — client-only Three.js viewport
 - `app/simulation.worker.ts` — Wasm initialization, authoritative volume
   scheduling, selected-plane extraction, and immutable snapshot transfer
-- `app/carbonization/`, `app/pyrolysis.worker.ts` — independent radial
-  transformation benchmark controls and bounded Rust/Wasm worker scheduling
+- `app/carbonization/`, `app/bcc.worker.ts` — BCC/substrate controls, solved
+  3D geometry and sections, and Rust/Wasm worker scheduling
+- `app/pyrolysis.worker.ts` — independent radial cylinder worker
+- `rust/reaction-lens/src/bcc/` — connected BCC mesh, finite-strain viscoelastic
+  mechanics, deformed-mesh nodal transport and independent verification
 - `rust/reaction-lens/src/pyrolysis/` — dry specimen, schedule, chemistry,
   network/density laws, conservative radial transport and checkpoint validation
 - `rust/reaction-lens/src/whole_volume.rs` — dense 3D resin, vectorial PSF,

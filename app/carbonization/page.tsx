@@ -3,8 +3,8 @@ import { SiteHeader, SiteFooter } from "../site-chrome";
 import CarbonizationLab from "./carbonization-lab";
 
 export const metadata = pageMetadata({
-  title: "Carbonization Lab — Finite-Strain Strut Benchmark",
-  description: "Explore mass-conserving carbonization, finite-strain shrinkage, axial supports and stress in an uncalibrated Rust/Wasm long-cylinder benchmark.",
+  title: "Carbonization Lab — BCC Foam on a Substrate",
+  description: "Explore three-dimensional BCC foam pyrolysis, shrinkage, volatile transport and substrate constraint in a Rust/Wasm tetrahedral benchmark.",
   path: "/carbonization",
 });
 

@@ -4,6 +4,7 @@
 //! The older 2D core remains platform-neutral for native parity tests only.
 //! Wasm render and XY-slice snapshots never alias authoritative state arrays.
 
+pub mod bcc;
 mod parameters;
 pub mod pyrolysis;
 mod simulation;

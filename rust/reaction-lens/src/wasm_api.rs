@@ -203,6 +203,48 @@ fn validation_error(error: impl std::fmt::Display) -> JsValue {
     js_error(error.to_string())
 }
 
+#[wasm_bindgen]
+pub fn bcc_defaults() -> Result<JsValue, JsValue> {
+    serde_wasm_bindgen::to_value(&crate::bcc::BccConfig::default()).map_err(validation_error)
+}
+
+#[wasm_bindgen]
+pub struct BccSimulation {
+    inner: crate::bcc::BccCore,
+}
+
+#[wasm_bindgen]
+impl BccSimulation {
+    pub fn accepted_steps(&self) -> u32 {
+        self.inner.accepted_steps()
+    }
+    #[wasm_bindgen(constructor)]
+    pub fn new(config: JsValue) -> Result<BccSimulation, JsValue> {
+        let config = serde_wasm_bindgen::from_value(config).map_err(validation_error)?;
+        Ok(Self {
+            inner: crate::bcc::BccCore::new(config).map_err(validation_error)?,
+        })
+    }
+    pub fn restore(checkpoint: JsValue) -> Result<BccSimulation, JsValue> {
+        let checkpoint = serde_wasm_bindgen::from_value(checkpoint).map_err(validation_error)?;
+        Ok(Self {
+            inner: crate::bcc::BccCore::from_checkpoint(checkpoint).map_err(validation_error)?,
+        })
+    }
+    pub fn advance(&mut self) -> bool {
+        self.inner.advance()
+    }
+    pub fn get_snapshot(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.inner.snapshot()).map_err(validation_error)
+    }
+    pub fn get_diagnostics(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.inner.diagnostics()).map_err(validation_error)
+    }
+    pub fn export_checkpoint(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.inner.checkpoint()).map_err(validation_error)
+    }
+}
+
 fn js_error(message: impl AsRef<str>) -> JsValue {
     js_sys_error(message.as_ref())
 }

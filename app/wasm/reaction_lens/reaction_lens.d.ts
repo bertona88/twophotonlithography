@@ -1,6 +1,18 @@
 /* tslint:disable */
 /* eslint-disable */
 
+export class BccSimulation {
+    free(): void;
+    [Symbol.dispose](): void;
+    accepted_steps(): number;
+    advance(): boolean;
+    export_checkpoint(): any;
+    get_diagnostics(): any;
+    get_snapshot(): any;
+    constructor(config: any);
+    static restore(checkpoint: any): BccSimulation;
+}
+
 /**
  * Owns full-resolution Rust state independently of subsequent exposure/reset.
  */
@@ -64,6 +76,8 @@ export class WholeVolumeSimulation {
     xy_slice_z_um(): number;
 }
 
+export function bcc_defaults(): any;
+
 /**
  * Compute a renderable PSF envelope from the same adaptive Debye kernel used
  * by the 3D simulation, without constructing or mutating simulation state.
@@ -112,6 +126,15 @@ export interface InitOutput {
     readonly pyrolysissimulation_snapshot_len: (a: number) => number;
     readonly pyrolysissimulation_get_diagnostics: (a: number, b: number) => void;
     readonly pyrolysissimulation_export_checkpoint: (a: number, b: number) => void;
+    readonly bcc_defaults: (a: number) => void;
+    readonly __wbg_bccsimulation_free: (a: number, b: number) => void;
+    readonly bccsimulation_accepted_steps: (a: number) => number;
+    readonly bccsimulation_new: (a: number, b: number) => void;
+    readonly bccsimulation_restore: (a: number, b: number) => void;
+    readonly bccsimulation_advance: (a: number) => number;
+    readonly bccsimulation_get_snapshot: (a: number, b: number) => void;
+    readonly bccsimulation_get_diagnostics: (a: number, b: number) => void;
+    readonly bccsimulation_export_checkpoint: (a: number, b: number) => void;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_export3: (a: number) => void;

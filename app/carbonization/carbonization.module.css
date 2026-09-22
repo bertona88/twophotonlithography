@@ -46,3 +46,91 @@
 .file input { font-size: 11px !important; }
 @media (max-width: 1000px) { .layout { grid-template-columns: 260px minmax(0, 1fr); gap: 16px; } .metrics { grid-template-columns: 1fr 1fr; } .panel { padding: 18px; } .profile { grid-template-columns: 1fr; } .profile > svg { max-width: 190px; margin: 0 auto; } }
 @media (max-width: 700px) { .lab { padding: 24px 16px 45px; } .heading { display: block; } .heading > a { display: inline-block; margin-top: 16px; } .layout { grid-template-columns: 1fr; } .diagnostics { grid-template-columns: 1fr 1fr; } }
+
+/* The BCC workspace keeps the specimen as the dominant surface. */
+.bccLab { max-width: 1480px; padding-top: 28px; }
+.bccHeading { display: flex; align-items: end; justify-content: space-between; gap: 28px; margin: 0 0 30px; }
+.bccHeading h1 { margin: 7px 0 10px; font-size: clamp(1.9rem, 3.2vw, 2.8rem); font-weight: 570; letter-spacing: -.04em; }
+.bccHeading p:not(.eyebrow) { font-size: 13px; color: #a3a7b7; margin: 0; line-height: 1.6; }
+.bccHeading a { font-size: 12px; padding-bottom: 5px; white-space: nowrap; text-decoration: none; }
+.bccLayout { display: grid; grid-template-columns: minmax(0, 1fr) 304px; align-items: start; gap: 28px; border-top: 1px solid #303440; }
+.workspace { min-width: 0; }
+.viewerToolbar { min-height: 66px; display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.viewerToolbar > label { display: flex; align-items: center; gap: 10px; color: #929bad; font-size: 11px; }
+.viewerToolbar select { max-width: 225px; background: #191d29; color: #d9dcea; border: 1px solid #373d4c; border-radius: 4px; padding: 8px; font: inherit; font-size: 12px; }
+.viewOptions { display: flex; align-items: center; gap: 15px; }
+.viewOptions label { display: flex; gap: 5px; align-items: center; color: #b8bfd0; font-size: 11px; white-space: nowrap; }
+.viewOptions input { accent-color: #bea2fb; width: 14px; height: 14px; }
+.meshFrame { height: clamp(330px, calc(100svh - 385px), 575px); position: relative; overflow: hidden; background: #111722; }
+.meshCanvas { position: absolute; inset: 0; }
+.meshCanvas canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.meshTop, .meshBottom { position: absolute; left: 18px; right: 18px; display: flex; justify-content: space-between; align-items: center; gap: 12px; pointer-events: none; }
+.meshTop { top: 17px; color: #c0c5d2; font-size: 10px; letter-spacing: .08em; }
+.meshTop button { pointer-events: auto; padding: 7px 9px; border: 1px solid #4e5667; border-radius: 4px; background: #1a2130; color: #c6cbd6; font-size: 10px; cursor: pointer; }
+.meshBottom { bottom: 15px; font-size: 10px; color: #a5afc1; }
+.meshBottom span { padding: 5px 7px; background: #111722d9; border-radius: 3px; }
+.meshLoading { position: absolute; inset: 0; display: grid; place-items: center; font-size: 13px; color: #a7aabd; pointer-events: none; }
+.fallback { position: absolute; inset: 0; display: grid; place-items: center; }
+.fallback > span { position: absolute; top: 58px; left: 25px; color: #c1c7d5; font-size: 11px; }
+.projectedMesh { width: 100%; height: 100%; }
+.colorLegend { display: flex; align-items: center; gap: 11px; padding: 13px 0; font-size: 10px; color: #a7adbd; border-bottom: 1px solid #2c3240; }
+.colorLegend > i { flex: 1; max-width: 150px; height: 5px; background: linear-gradient(90deg, hsl(265 68% 38%), hsl(160 68% 51%), hsl(50 68% 64%)); }
+.stateLine { display: flex; align-items: center; gap: 8px; padding: 17px 0 12px; font-size: 11px; font-variant-numeric: tabular-nums; color: #929bae; }
+.stateLine strong { font-weight: 500; color: #dadfea; text-transform: capitalize; }
+.stateLine > span:nth-last-child(2) { margin-left: auto; }
+.stateLine > span:last-child { min-width: 74px; text-align: right; }
+.statusDot { width: 6px; height: 6px; border-radius: 50%; background: #828a9b; }
+.statusDot[data-running=true] { background: #c0a6f8; box-shadow: 0 0 0 3px #c0a6f81a; }
+.bccProgress { display: block; width: 100%; height: 3px; accent-color: #b99ce9; border: 0; }
+.bccMetrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; padding: 22px 0; border-bottom: 1px solid #303440; font-variant-numeric: tabular-nums; }
+.bccMetrics span { display: block; font-size: 10px; color: #969fb2; margin-bottom: 9px; }
+.bccMetrics strong { font-size: clamp(16px, 1.8vw, 24px); font-weight: 500; letter-spacing: -.02em; }
+.cellProbe { display: grid; grid-template-columns: minmax(160px, 1fr) auto; gap: 28px; align-items: center; padding: 20px 0 13px; }
+.cellProbe label { font-size: 10px; color: #a8aec0; line-height: 1.8; }
+.cellProbe input { display: block; margin: 8px 0 0; width: 100%; accent-color: #b899ef; }
+.cellProbe > div { text-align: right; }
+.cellProbe strong { display: block; font-size: 18px; color: #e0d8f6; font-weight: 500; margin-bottom: 6px; }
+.cellProbe small { font-size: 10px; font-weight: 400; color: #aaa2c0; }
+.cellProbe span { font-size: 10px; color: #919bb0; }
+.viewerNote { font-size: 11px; line-height: 1.65; color: #8f99ae; margin: 8px 0 0; }
+.controls.panel { padding: 24px 0 0 24px; border: 0; border-left: 1px solid #303440; background: none; border-radius: 0; }
+.controls h2 { margin-bottom: 18px; font-size: 15px; font-weight: 500; }
+.controls label { font-size: 11px; margin: 12px 0; }
+.controls input:not([type=range]), .controls select { padding: 9px 8px; border-radius: 4px; background: #181c27; }
+.controls h3 { font-size: 12px; font-weight: 500; padding-top: 18px; border-top: 1px solid #303440; }
+.controls button { border-radius: 4px; }
+.controls .primary { transition: background 140ms, transform 140ms; }
+.controls .primary:not(:disabled):hover { background: #d1baff; }
+.controls .primary:not(:disabled):active { transform: translateY(1px); }
+.controls details { margin-top: 10px; }
+.controls details[open] { padding-bottom: 8px; }
+.controls .note { color: #9099ad; font-size: 10px; }
+.inputPair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.changed { color: #dfc391 !important; font-size: 11px; line-height: 1.5; }
+.errorHint { display: block; margin-top: 7px; font-size: 11px; color: #e7b3bf; }
+.analysisSection { border-top: 1px solid #303440; margin-top: 40px; padding-top: 28px; }
+.analysisHeading { display: flex; align-items: center; justify-content: space-between; gap: 25px; margin-bottom: 26px; }
+.analysisHeading h2 { font-size: 19px; font-weight: 500; letter-spacing: -.02em; margin: 0 0 8px; }
+.analysisHeading p { color: #989eb0; font-size: 12px; margin: 0; }
+.comparisonActions, .exportActions { display: flex; gap: 8px; flex-wrap: wrap; }
+.analysisSection button { padding: 9px 11px; border: 1px solid #464054; background: #1d1c28; color: #d6c5f2; border-radius: 4px; font-size: 11px; cursor: pointer; }
+.analysisSection button:disabled, .meshTop button:disabled { opacity: .4; cursor: default; }
+.bccLab :focus-visible { outline: 2px solid #cfb8ff; outline-offset: 3px; }
+.historyGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 38px; }
+.bccDiagnostics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px 20px; margin: 30px 0; padding: 25px 0; border-top: 1px solid #282d3b; border-bottom: 1px solid #282d3b; }
+.bccDiagnostics dt { font-size: 10px; color: #8d96aa; margin-bottom: 7px; }
+.bccDiagnostics dd { margin: 0; color: #c8d0df; font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.comparisonRow { display: flex; gap: 25px; flex-wrap: wrap; margin-top: 25px; border-left: 2px solid #bcb0d3; padding: 12px 18px; background: #181b26; color: #a9afc0; font-size: 11px; }
+.comparisonRow strong { color: #e5dced; font-weight: 500; }
+.analysisSection > .note { color: #8d96a9; max-width: 900px; }
+.modelScope { display: grid; grid-template-columns: minmax(220px, 1fr) 2fr; gap: 55px; border-top: 1px solid #303440; margin-top: 40px; padding: 30px 0 0; }
+.modelScope h2 { font-size: 22px; font-weight: 500; letter-spacing: -.02em; line-height: 1.4; }
+.modelScope p:not(.eyebrow) { font-size: 12px; color: #9ca4b7; line-height: 1.8; margin: 0 0 13px; }
+@media (max-width: 1100px) { .bccLayout { gap: 18px; grid-template-columns: minmax(0, 1fr) 270px; } .controls.panel { padding-left: 18px; } .viewerToolbar { flex-wrap: wrap; gap: 8px; padding: 14px 0; } .meshFrame { height: clamp(330px, calc(100svh - 400px), 480px); } .cellProbe { gap: 18px; grid-template-columns: 1fr; } .cellProbe > div { text-align: left; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; } .bccDiagnostics { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 760px) { .bccLab { padding: 23px 16px 42px; } .bccHeading { display: block; margin-bottom: 22px; } .bccHeading a { display: inline-block; margin-top: 14px; } .bccHeading h1 { font-size: 29px; } .bccHeading p:not(.eyebrow) { font-size: 12px; max-width: 460px; } .bccLayout { grid-template-columns: 1fr; gap: 26px; } .viewerToolbar { gap: 12px; min-height: 64px; } .viewerToolbar select { max-width: 207px; } .viewOptions { gap: 12px; } .meshFrame { height: 420px; } .meshTop { left: 12px; right: 12px; font-size: 8px; } .meshBottom { left: 8px; right: 8px; font-size: 8px; gap: 3px; } .colorLegend { font-size: 9px; gap: 8px; } .colorLegend > i { min-width: 35px; } .bccMetrics { gap: 12px; } .bccMetrics strong { font-size: 17px; } .bccMetrics span { font-size: 9px; } .controls.panel { padding: 24px 0 0; border-left: 0; border-top: 1px solid #303440; } .controls label { font-size: 12px; } .controls .note { font-size: 11px; } .controls input:not([type=range]), .controls select { padding: 12px; } .controls button { min-height: 40px; } .analysisHeading { display: block; margin-bottom: 20px; } .comparisonActions { margin-top: 18px; } .historyGrid { grid-template-columns: 1fr; gap: 28px; } .bccDiagnostics { grid-template-columns: 1fr 1fr; gap: 24px 14px; } .modelScope { grid-template-columns: 1fr; gap: 10px; } .modelScope h2 { font-size: 20px; } .modelScope h2 br { display: none; } }
+@media (max-width: 400px) { .meshFrame { height: 360px; } .bccMetrics { grid-template-columns: 1fr 1fr; row-gap: 20px; } .bccMetrics strong { font-size: 21px; } .bccMetrics span { font-size: 10px; } }
+@media (prefers-reduced-motion: reduce) { .controls .primary { transition: none; } }
+
+.transportDetails { padding: 0 0 22px; color: #aaa4bc; font-size: 11px; }
+.transportDetails summary { cursor: pointer; color: #c3b1df; padding: 5px 0; }
+.transportDetails p { font-size: 11px; line-height: 1.7; max-width: 740px; color: #9aa3b6; }

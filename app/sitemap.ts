@@ -5,6 +5,7 @@ const pages = [
   { path: "/", changeFrequency: "weekly", priority: 1 },
   { path: "/lab", changeFrequency: "weekly", priority: 0.9 },
   { path: "/carbonization", changeFrequency: "weekly", priority: 0.8 },
+  { path: "/carbonization/strut", changeFrequency: "monthly", priority: 0.6 },
   { path: "/guides", changeFrequency: "weekly", priority: 0.9 },
   { path: "/guides/two-photon-lithography", changeFrequency: "monthly", priority: 0.9 },
   { path: "/guides/multiphoton-lithography", changeFrequency: "monthly", priority: 0.85 },
@@ -17,7 +18,7 @@ const pages = [
 export default function sitemap(): MetadataRoute.Sitemap {
   return pages.map((page) => ({
     url: absoluteUrl(page.path),
-    lastModified: "2026-08-02",
+    lastModified: page.path.startsWith("/carbonization") ? "2026-09-22" : "2026-08-02",
     changeFrequency: page.changeFrequency,
     priority: page.priority,
   }));

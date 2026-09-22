@@ -124,13 +124,13 @@ test("carbonization initialization failure is visible and rejects queued work", 
 test("the benchmark route declares its physical limits in rendered HTML", async () => {
   // Inspect the actual server-rendered route, not source-text patterns.
   const { default: app } = await import(new URL("../dist/server/index.js", import.meta.url));
-  const response = await app.fetch(new Request("http://localhost/carbonization"), { ASSETS: { fetch: async () => new Response("", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
+  const response = await app.fetch(new Request("http://localhost/carbonization/strut"), { ASSETS: { fetch: async () => new Response("", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /Inside the transforming strut/);
   assert.match(html, /not an sp² percentage/);
   assert.match(html, /excludes end effects, bending, buckling, relaxation/);
-  assert.match(html, /radial-mechanics|carbonization-lab/);
+  assert.match(html, /radial-mechanics|strut-lab/);
   // Check that both the application bundle and the Wasm asset are emitted.
   const files = await readdir(path.join(root, "assets"));
   const wasm = files.find(name => /^reaction_lens_bg-.*\.wasm$/.test(name));
