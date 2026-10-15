@@ -71,6 +71,27 @@ test("accepts partial presets and exact destination boundaries", () => {
   );
 });
 
+test("labels partial paper presets as literature without claiming a traced objective", () => {
+  const handoff = parseOpticalSetupHandoff({
+    ...identity,
+    basis: "paper",
+    wavelengthNm: "780",
+    repetitionRateMHz: "80",
+    pulseDurationFs: "120",
+    numericalAperture: "0.8",
+  });
+  assert.deepEqual(handoff, {
+    params: { wavelength: 780, repetitionRate: 80, pulseDuration: 120, na: 0.8 },
+    imported: ["wavelength", "repetitionRate", "pulseDuration", "na"],
+    rejected: [],
+    basis: "paper",
+  });
+  const notice = opticalSetupImportNotice(handoff);
+  assert.match(notice, /compatible literature parameters/);
+  assert.match(notice, /NA was copied from the literature record/);
+  assert.doesNotMatch(notice, /single objective traced/);
+});
+
 test("rejects invalid supplied values without clamping valid neighbors", () => {
   const handoff = parseOpticalSetupHandoff({
     ...identity,
@@ -111,5 +132,7 @@ test("ignores unrelated, unsupported-version, and duplicate-identity queries", (
   assert.equal(parseOpticalSetupHandoff({ ...identity, v: "2", wavelengthNm: "780" }), null);
   assert.equal(parseOpticalSetupHandoff({ ...identity, from: ["opticalsetup", "other"] }), null);
   assert.equal(parseOpticalSetupHandoff({ ...identity, v: ["1", "1"] }), null);
+  assert.equal(parseOpticalSetupHandoff({ ...identity, basis: "scene", wavelengthNm: "780" }), null);
+  assert.equal(parseOpticalSetupHandoff({ ...identity, basis: ["paper", "paper"], wavelengthNm: "780" }), null);
   assert.equal(opticalSetupImportNotice(null), null);
 });

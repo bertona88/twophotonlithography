@@ -25,6 +25,9 @@ function singleValue(input, key) {
 export function parseOpticalSetupHandoff(input = {}) {
   if (singleValue(input, 'from') !== HANDOFF_SOURCE
     || singleValue(input, 'v') !== HANDOFF_VERSION) return null;
+  const basisValues = valuesFor(input, 'basis');
+  if (basisValues.length > 1 || (basisValues.length === 1 && basisValues[0] !== 'paper')) return null;
+  const basis = basisValues[0];
 
   const params = {};
   const imported = [];
@@ -43,7 +46,7 @@ export function parseOpticalSetupHandoff(input = {}) {
     imported.push(field.key);
   }
 
-  return { params, imported, rejected };
+  return { params, imported, rejected, ...(basis ? { basis } : {}) };
 }
 
 export function opticalSetupImportNotice(handoff) {
@@ -53,14 +56,23 @@ export function opticalSetupImportNotice(handoff) {
   }
 
   const count = handoff.imported.length;
-  let notice = `Imported ${count} compatible setup ${count === 1 ? 'parameter' : 'parameters'} from OpticalSetup.`;
+  const literature = handoff.basis === 'paper';
+  let notice = literature
+    ? `Imported ${count} compatible literature ${count === 1 ? 'parameter' : 'parameters'} from OpticalSetup.`
+    : `Imported ${count} compatible setup ${count === 1 ? 'parameter' : 'parameters'} from OpticalSetup.`;
   if (handoff.rejected.length) notice += ` Ignored invalid ${handoff.rejected.join(', ')}.`;
   if (handoff.imported.includes('power') || handoff.imported.includes('pulseDuration')) {
-    notice += ' Source power and pulse duration were copied into specimen-plane controls; verify delivery losses and pulse broadening.';
+    notice += literature
+      ? ' Literature power and pulse duration were copied into specimen-plane controls; verify what plane they describe, delivery losses, and pulse broadening.'
+      : ' Source power and pulse duration were copied into specimen-plane controls; verify delivery losses and pulse broadening.';
   }
   notice += handoff.imported.includes('na')
-    ? ' NA was copied from the single objective traced to the sample.'
-    : ' NA keeps the lab default because no single traced objective was supplied.';
+    ? literature
+      ? ' NA was copied from the literature record.'
+      : ' NA was copied from the single objective traced to the sample.'
+    : literature
+      ? ' NA keeps the lab default because the literature record supplied no supported value.'
+      : ' NA keeps the lab default because no single traced objective was supplied.';
   notice += ' Scan, photoinitiator, bandwidth, and polarization settings keep the lab defaults; its optical model assumes circular polarization.';
   return notice;
 }
