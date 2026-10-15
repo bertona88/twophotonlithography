@@ -113,3 +113,24 @@ test("ignores unrelated, unsupported-version, and duplicate-identity queries", (
   assert.equal(parseOpticalSetupHandoff({ ...identity, v: ["1", "1"] }), null);
   assert.equal(opticalSetupImportNotice(null), null);
 });
+
+test("literature presets retain partial fields without claiming a traced objective", () => {
+  const handoff = parseOpticalSetupHandoff(new URLSearchParams({
+    ...identity, basis: "paper", wavelengthNm: "800", numericalAperture: "1.25",
+  }));
+  assert.deepEqual(handoff.params, { wavelength: 800, na: 1.25 });
+  assert.equal(handoff.basis, "paper");
+  const notice = opticalSetupImportNotice(handoff);
+  assert.match(notice, /Imported 2 compatible literature values/);
+  assert.match(notice, /omitted values keep the lab defaults/);
+  assert.match(notice, /no objective was traced/);
+  assert.doesNotMatch(notice, /NA was copied from the single objective traced/);
+});
+
+test("paper basis does not widen numerical acceptance or bypass duplicate rejection", () => {
+  const handoff = parseOpticalSetupHandoff(new URLSearchParams(
+    "from=opticalsetup&v=1&basis=paper&wavelengthNm=800&repetitionRateMHz=0.001&pulseDurationFs=35&sourcePowerMw=7000&numericalAperture=0.8&numericalAperture=1",
+  ));
+  assert.deepEqual(handoff.params, { wavelength: 800 });
+  assert.equal(handoff.rejected.length, 4);
+});

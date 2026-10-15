@@ -43,7 +43,9 @@ export function parseOpticalSetupHandoff(input = {}) {
     imported.push(field.key);
   }
 
-  return { params, imported, rejected };
+  return { params, imported, rejected,
+    ...(singleValue(input, 'basis') === 'paper' ? { basis: 'paper' } : {}),
+  };
 }
 
 export function opticalSetupImportNotice(handoff) {
@@ -53,13 +55,17 @@ export function opticalSetupImportNotice(handoff) {
   }
 
   const count = handoff.imported.length;
-  let notice = `Imported ${count} compatible setup ${count === 1 ? 'parameter' : 'parameters'} from OpticalSetup.`;
+  let notice = handoff.basis === 'paper'
+    ? `Imported ${count} compatible literature ${count === 1 ? 'value' : 'values'} from the OpticalSetup paper collection. This partial preset does not reproduce the published apparatus; omitted values keep the lab defaults.`
+    : `Imported ${count} compatible setup ${count === 1 ? 'parameter' : 'parameters'} from OpticalSetup.`;
   if (handoff.rejected.length) notice += ` Ignored invalid ${handoff.rejected.join(', ')}.`;
   if (handoff.imported.includes('power') || handoff.imported.includes('pulseDuration')) {
     notice += ' Source power and pulse duration were copied into specimen-plane controls; verify delivery losses and pulse broadening.';
   }
   notice += handoff.imported.includes('na')
-    ? ' NA was copied from the single objective traced to the sample.'
+    ? (handoff.basis === 'paper'
+      ? ' NA is a reported literature value; no objective was traced to this sample.'
+      : ' NA was copied from the single objective traced to the sample.')
     : ' NA keeps the lab default because no single traced objective was supplied.';
   notice += ' Scan, photoinitiator, bandwidth, and polarization settings keep the lab defaults; its optical model assumes circular polarization.';
   return notice;
