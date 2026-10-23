@@ -147,8 +147,12 @@ Run the complete validation suite:
 npm run lint
 npm run typecheck
 npm run lint:rust
-npm test
+VINEXT_TARGET=node npm test
 ```
+
+Use the Node target for tests that load the built request handler. The default
+Cloudflare build is validated separately with `VINEXT_TARGET=cloudflare npm run
+build`; its bundle may import Cloudflare-native modules unavailable to Node.
 
 Focused commands:
 

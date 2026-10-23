@@ -66,7 +66,7 @@ builds. Install the updated deploy script before releasing Vinext 1.2 or newer.
 The deployment script runs:
 
 ```bash
-npm test
+VINEXT_TARGET=node npm test
 ```
 
 `npm test` runs the Rust tests, invokes the production build, validates that the
