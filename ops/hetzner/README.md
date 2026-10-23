@@ -58,6 +58,11 @@ For a new revision, `/usr/local/sbin/twophotonlithography-deploy`:
 The service listens only on `127.0.0.1:45180`. Nginx owns public HTTP and HTTPS,
 redirects `www` to the apex, and proxies the apex to the service.
 
+The deploy script sets `VINEXT_TARGET=node`, matching Linux CI. This omits the
+Cloudflare Vite runtime plugin for the Node artifact; Worker-only imports cannot
+be loaded by Node. The default configuration remains available for Cloudflare
+builds. Install the updated deploy script before releasing Vinext 1.2 or newer.
+
 The deployment script runs:
 
 ```bash
