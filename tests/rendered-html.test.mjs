@@ -42,7 +42,7 @@ test("renders a search-focused homepage with canonical and social metadata", asy
   );
   assert.match(html, /href="\/wofi\.json">Provenance<\/a>/);
   assert.match(html, /href="\/LICENSE\.txt">License<\/a>/);
-  assert.match(html, /rel="canonical" href="https:\/\/twophotonlithography\.com\/"/);
+  assert.match(html, /rel="canonical" href="https:\/\/twophotonlithography\.com\/?"/);
   assert.match(html, /property="og:image" content="https:\/\/twophotonlithography\.com\/og\.png"/);
   assert.match(html, /"@type":"WebApplication"/);
   assert.doesNotMatch(html, /codex-preview/);
