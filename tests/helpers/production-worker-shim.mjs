@@ -22,9 +22,9 @@ globalThis.fetch = async (input, init) => {
         ? input.pathname
         : input.url;
 
-  if (requestUrl.startsWith("/assets/") || requestUrl.startsWith("/benchy/")) {
+  if (requestUrl.startsWith("/assets/") || requestUrl.startsWith("/_next/static/") || requestUrl.startsWith("/benchy/")) {
     if (workerData.wasmFailure === "invalid") {
-      if (requestUrl.startsWith("/assets/")) {
+      if (requestUrl.endsWith(".wasm")) {
         return new Response(new Uint8Array([0, 1, 2, 3]), {
           headers: { "Content-Type": "application/wasm" },
         });

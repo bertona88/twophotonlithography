@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { productionFetch } from "./helpers/production-artifact.mjs";
+
 async function application() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}-${Math.random()}`);
   const { default: worker } = await import(workerUrl.href);
   return {
     fetch(path, accept = "text/html") {
-      return worker.fetch(
+      return productionFetch(worker,
         new Request(`http://localhost${path}`, { headers: { accept } }),
-        { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
-        { waitUntil() {}, passThroughOnException() {} },
       );
     },
   };

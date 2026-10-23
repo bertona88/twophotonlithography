@@ -5,6 +5,8 @@ import test from "node:test";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 
+import { clientAsset } from "./helpers/production-artifact.mjs";
+
 const SLICE_FIELD_COUNT = 5;
 const MESSAGE_TIMEOUT_MS = 30_000;
 const EXPOSURE_ACTIVE_BUDGET_MS = 20_000;
@@ -55,7 +57,7 @@ async function productionWorkerPath() {
   }
 
   assert.ok(match, "the production lab must reference a worker bundle");
-  return path.join(CLIENT_ROOT, "assets", match[0]);
+  return clientAsset(CLIENT_ROOT, /^simulation\.worker-[\w-]+\.js$/);
 }
 
 function waitForMessage(worker, predicate, description) {
