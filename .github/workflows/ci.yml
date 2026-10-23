@@ -61,3 +61,7 @@ jobs:
           if-no-files-found: error
       - run: npm run install:ci
       - run: npm test
+      - name: Validate the Cloudflare build remains available
+        env:
+          VINEXT_TARGET: cloudflare
+        run: npm run build

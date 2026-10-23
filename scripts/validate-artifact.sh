@@ -65,7 +65,8 @@ magic="$(od -An -tx1 -N4 "${wasm}" | tr -d '[:space:]')"
   exit 65
 }
 
-node --input-type=module - "${worker}" "${hosting}" <<'NODE'
+if [[ "${VINEXT_TARGET:-cloudflare}" == node ]]; then
+  node --input-type=module - "${worker}" "${hosting}" <<'NODE'
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
@@ -79,5 +80,12 @@ if (!worker.default || typeof worker.default.fetch !== "function") {
   throw new Error("dist/server/index.js must have an ESM default export with fetch(request, env, ctx)");
 }
 NODE
+else
+  # Worker bundles may import Cloudflare-native modules that Node cannot load.
+  # Wrangler validates their deployment bundle without publishing it.
+  "${SITES_PROJECT_ROOT}/node_modules/.bin/wrangler" deploy --dry-run \
+    --config "${SITES_PROJECT_ROOT}/dist/server/wrangler.json" \
+    --outdir "${SITES_PROJECT_ROOT}/.sites-runtime/worker-validation"
+fi
 
 echo "Validated Sites artifact: Worker, hosting, Rust/Wasm, license, and WOFI provenance are present."
