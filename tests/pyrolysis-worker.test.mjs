@@ -1,18 +1,17 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
-import path from "node:path";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 
+import { clientAsset, productionFetch } from "./helpers/production-artifact.mjs";
+
 const root = fileURLToPath(new URL("../dist/client/", import.meta.url));
 
 async function harness(wasmFailure) {
-  const files = await readdir(path.join(root, "assets"));
-  const filename = files.find(name => /^pyrolysis\.worker-[\w-]+\.js$/.test(name));
-  assert.ok(filename, "production build must contain the Rust-backed carbonization worker");
+  const workerPath = await clientAsset(root, /^pyrolysis\.worker-[\w-]+\.js$/);
   const worker = new Worker(new URL("./helpers/production-worker-shim.mjs", import.meta.url), {
-    type: "module", workerData: { clientRoot: root, workerPath: path.join(root, "assets", filename), wasmFailure },
+    type: "module", workerData: { clientRoot: root, workerPath, wasmFailure },
   });
   const inbox = [];
   let notify = () => {};
@@ -124,7 +123,7 @@ test("carbonization initialization failure is visible and rejects queued work", 
 test("the benchmark route declares its physical limits in rendered HTML", async () => {
   // Inspect the actual server-rendered route, not source-text patterns.
   const { default: app } = await import(new URL("../dist/server/index.js", import.meta.url));
-  const response = await app.fetch(new Request("http://localhost/carbonization/strut"), { ASSETS: { fetch: async () => new Response("", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
+  const response = await productionFetch(app, new Request("http://localhost/carbonization/strut"));
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /Inside the transforming strut/);
@@ -132,10 +131,8 @@ test("the benchmark route declares its physical limits in rendered HTML", async 
   assert.match(html, /excludes end effects, bending, buckling, relaxation/);
   assert.match(html, /radial-mechanics|strut-lab/);
   // Check that both the application bundle and the Wasm asset are emitted.
-  const files = await readdir(path.join(root, "assets"));
-  const wasm = files.find(name => /^reaction_lens_bg-.*\.wasm$/.test(name));
-  assert.ok(wasm);
-  const bytes = await readFile(path.join(root, "assets", wasm));
+  const wasm = await clientAsset(root, /^reaction_lens_bg-.*\.wasm$/);
+  const bytes = await readFile(wasm);
   assert.deepEqual([...bytes.subarray(0, 4)], [0, 97, 115, 109]);
 });
 

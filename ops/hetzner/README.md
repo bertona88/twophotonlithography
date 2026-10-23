@@ -8,7 +8,7 @@ minutes and does nothing when the revision has not changed.
 
 The deploy user must have the same pinned toolchain as development:
 
-- Node.js `>=22.13.0`
+- Node.js `>=24.22.1`
 - Rust `1.88.0`
 - the `wasm32-unknown-unknown` target
 - `wasm-pack 0.13.1`
@@ -58,10 +58,15 @@ For a new revision, `/usr/local/sbin/twophotonlithography-deploy`:
 The service listens only on `127.0.0.1:45180`. Nginx owns public HTTP and HTTPS,
 redirects `www` to the apex, and proxies the apex to the service.
 
+The deploy script sets `VINEXT_TARGET=node`, matching Linux CI. This omits the
+Cloudflare Vite runtime plugin for the Node artifact; Worker-only imports cannot
+be loaded by Node. The default configuration remains available for Cloudflare
+builds. Install the updated deploy script before releasing Vinext 1.2 or newer.
+
 The deployment script runs:
 
 ```bash
-npm test
+VINEXT_TARGET=node npm test
 ```
 
 `npm test` runs the Rust tests, invokes the production build, validates that the

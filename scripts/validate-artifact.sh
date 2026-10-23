@@ -65,7 +65,8 @@ magic="$(od -An -tx1 -N4 "${wasm}" | tr -d '[:space:]')"
   exit 65
 }
 
-node --input-type=module - "${worker}" "${hosting}" <<'NODE'
+if [[ "${VINEXT_TARGET:-cloudflare}" == node ]]; then
+  node --input-type=module - "${worker}" "${hosting}" <<'NODE'
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
@@ -75,9 +76,24 @@ JSON.parse(await readFile(hostingPath, "utf8"));
 const workerUrl = pathToFileURL(workerPath);
 workerUrl.searchParams.set("sites-validation", `${process.pid}-${Date.now()}`);
 const worker = await import(workerUrl.href);
-if (!worker.default || typeof worker.default.fetch !== "function") {
-  throw new Error("dist/server/index.js must have an ESM default export with fetch(request, env, ctx)");
+if (typeof worker.default !== "function" && typeof worker.default?.fetch !== "function") {
+  throw new Error("The Node entry must export a request handler or a Worker fetch handler");
+ }
+const handle = typeof worker.default === "function"
+  ? worker.default
+  : request => worker.default.fetch(request, {}, {});
+const response = await handle(new Request("http://localhost/guides"));
+if (!(response instanceof Response) || response.status !== 200 ||
+    !(await response.text()).includes("<html")) {
+  throw new Error("The built Node entry did not render the guides route");
 }
 NODE
+else
+  # Worker bundles may import Cloudflare-native modules that Node cannot load.
+  # Wrangler validates their deployment bundle without publishing it.
+  "${SITES_PROJECT_ROOT}/node_modules/.bin/wrangler" deploy --dry-run \
+    --config "${SITES_PROJECT_ROOT}/dist/server/wrangler.json" \
+    --outdir "${SITES_PROJECT_ROOT}/.sites-runtime/worker-validation"
+fi
 
 echo "Validated Sites artifact: Worker, hosting, Rust/Wasm, license, and WOFI provenance are present."

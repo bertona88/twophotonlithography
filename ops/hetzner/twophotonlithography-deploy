@@ -92,6 +92,7 @@ git clean -ffd -e node_modules -e .sites-runtime
 
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=2048}"
 export SITE_URL
+export VINEXT_TARGET=node
 nice -n 10 npm run install:ci
 nice -n 10 npm test
 

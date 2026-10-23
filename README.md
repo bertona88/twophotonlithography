@@ -81,7 +81,7 @@ mutable view of Wasm simulation memory.
 
 Prerequisites:
 
-- Node.js `>=22.13.0`
+- Node.js `>=24.22.1`
 - Rust `1.88.0`, as pinned by `rust-toolchain.toml`
 - the `wasm32-unknown-unknown` Rust target
 - `wasm-pack 0.13.1`
@@ -147,8 +147,12 @@ Run the complete validation suite:
 npm run lint
 npm run typecheck
 npm run lint:rust
-npm test
+VINEXT_TARGET=node npm test
 ```
+
+Use the Node target for tests that load the built request handler. The default
+Cloudflare build is validated separately with `VINEXT_TARGET=cloudflare npm run
+build`; its bundle may import Cloudflare-native modules unavailable to Node.
 
 Focused commands:
 

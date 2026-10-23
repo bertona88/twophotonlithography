@@ -1,18 +1,16 @@
 import assert from "node:assert/strict";
-import { readdir } from "node:fs/promises";
-import path from "node:path";
 import test from "node:test";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 
+import { clientAsset, productionFetch } from "./helpers/production-artifact.mjs";
+
 const root = fileURLToPath(new URL("../dist/client/", import.meta.url));
 
 async function harness(wasmFailure) {
-  const files = await readdir(path.join(root, "assets"));
-  const filename = files.find(name => /^bcc\.worker-[\w-]+\.js$/.test(name));
-  assert.ok(filename, "production build must include the authoritative BCC worker");
+  const workerPath = await clientAsset(root, /^bcc\.worker-[\w-]+\.js$/);
   const worker = new Worker(new URL("./helpers/production-worker-shim.mjs", import.meta.url), {
-    type: "module", workerData: { clientRoot: root, workerPath: path.join(root, "assets", filename), wasmFailure },
+    type: "module", workerData: { clientRoot: root, workerPath, wasmFailure },
   });
   const inbox = [];
   let notify = () => {};
@@ -132,9 +130,7 @@ test("BCC startup failure is surfaced for queued commands", async () => {
 
 test("the BCC benchmark is the canonical carbonization route and exposes its model limits", async () => {
   const { default: app } = await import(new URL("../dist/server/index.js", import.meta.url));
-  const response = await app.fetch(new Request("http://localhost/carbonization"), {
-    ASSETS: { fetch: async () => new Response("", { status: 404 }) },
-  }, { waitUntil() {}, passThroughOnException() {} });
+  const response = await productionFetch(app, new Request("http://localhost/carbonization"));
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /BCC foam on a substrate/);
