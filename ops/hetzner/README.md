@@ -8,7 +8,7 @@ minutes and does nothing when the revision has not changed.
 
 The deploy user must have the same pinned toolchain as development:
 
-- Node.js `>=22.13.0`
+- Node.js `>=24.22.1`
 - Rust `1.88.0`
 - the `wasm32-unknown-unknown` target
 - `wasm-pack 0.13.1`

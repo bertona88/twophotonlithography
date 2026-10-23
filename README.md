@@ -81,7 +81,7 @@ mutable view of Wasm simulation memory.
 
 Prerequisites:
 
-- Node.js `>=22.13.0`
+- Node.js `>=24.22.1`
 - Rust `1.88.0`, as pinned by `rust-toolchain.toml`
 - the `wasm32-unknown-unknown` Rust target
 - `wasm-pack 0.13.1`
