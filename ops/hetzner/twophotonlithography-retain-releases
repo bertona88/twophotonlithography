@@ -24,7 +24,7 @@ def require(condition, message):
 
 
 def operations_only(repo, old, new):
-    result = subprocess.run(['git', '-C', str(repo), 'diff', '--name-only', '-z', old, new],
+    result = subprocess.run(['git', '-C', str(repo), 'diff', '--no-renames', '--name-only', '-z', old, new],
                             capture_output=True, timeout=30)
     if result.returncode:
         return False
@@ -137,6 +137,17 @@ def retain(root, live, state, *, initialize=False, rollbacks=(), activate=None,
     candidates = [validate_release(root, p.name) for p in sorted(root.iterdir())
                   if REVISION.fullmatch(p.name) and p.name not in kept]
     identities = {p: (p.stat().st_dev, p.stat().st_ino) for p in candidates}
+    # Hard links are safe to unlink. Symlinks into an obsolete release would
+    # break a retained runtime, including imports not currently open by Node.
+    if candidates:
+        for revision in kept:
+            for directory, dirs, files in os.walk(root / revision, followlinks=False):
+                for name in dirs + files:
+                    path = Path(directory) / name
+                    if path.is_symlink():
+                        target = path.resolve()
+                        require(not any(target == old or old in target.parents for old in candidates),
+                                'A retained release links into an obsolete release')
     unused_guard(candidates)
     result = {'apply': apply, 'retained_releases': kept,
               'remove_paths': [str(p) for p in candidates], 'removed_paths': []}
@@ -152,6 +163,8 @@ def retain(root, live, state, *, initialize=False, rollbacks=(), activate=None,
                     'Candidate directory changed during cleanup')
             shutil.rmtree(path)
             result['removed_paths'].append(str(path))
+        for revision in kept:
+            validate_release(root, revision)
         require(current_revision(root, live) == current, 'Current runtime changed after cleanup')
     return result
 

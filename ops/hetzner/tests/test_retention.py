@@ -95,6 +95,13 @@ class ReleaseTests(unittest.TestCase):
             self.initialize(apply=True)
         self.assertTrue((self.root / OLD).exists())
 
+    def test_retained_symlink_into_obsolete_release_blocks_deletion(self):
+        (self.root / C / 'lazy-import.js').symlink_to(self.root / OLD / 'dist/server/index.js')
+        with self.assertRaises(RuntimeError):
+            self.initialize(apply=True)
+        self.assertTrue((self.root / OLD).exists())
+        self.assertFalse(self.state.exists())
+
     def test_in_use_candidate_aborts_before_any_deletion(self):
         def busy(paths):
             raise RuntimeError('a process is using this release')
@@ -164,6 +171,12 @@ class OperationsOnlyTests(unittest.TestCase):
 
     def test_runtime_change_still_requires_normal_deployment(self):
         (self.repo / 'app.js').write_text('new runtime')
+        self.commit()
+        self.assertFalse(retention.operations_only(self.repo, self.old, 'HEAD'))
+
+    def test_renaming_runtime_code_into_ops_still_requires_deployment(self):
+        (self.repo / 'ops/hetzner').mkdir(parents=True)
+        self.git('mv', 'app.js', 'ops/hetzner/renamed.js')
         self.commit()
         self.assertFalse(retention.operations_only(self.repo, self.old, 'HEAD'))
 
