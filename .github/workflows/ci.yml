@@ -14,6 +14,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  operations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -m unittest discover -s ops/hetzner/tests -v
+      - run: bash -n ops/hetzner/twophotonlithography-deploy
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 35

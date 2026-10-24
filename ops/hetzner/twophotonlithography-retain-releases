@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""Keep the active Two-Photon runtime and its two successful rollback releases."""
+
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tempfile
+
+DEFAULT_ROOT = Path('/srv/twophotonlithography-releases')
+DEFAULT_LIVE = Path('/srv/twophotonlithography/current')
+DEFAULT_STATE = Path('/var/lib/twophotonlithography-deploy/release-retention.json')
+DEFAULT_LOCK = Path('/run/twophotonlithography-deploy.lock')
+REVISION = re.compile(r'[0-9a-f]{40}\Z')
+
+
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
+def operations_only(repo, old, new):
+    result = subprocess.run(['git', '-C', str(repo), 'diff', '--no-renames', '--name-only', '-z', old, new],
+                            capture_output=True, timeout=30)
+    if result.returncode:
+        return False
+    paths = result.stdout.decode().strip('\0').split('\0')
+    return bool(paths[0]) and all(path.startswith('ops/hetzner/') or path == '.github/workflows/ci.yml'
+                                  for path in paths)
+
+
+def validate_release(root, revision):
+    require(bool(REVISION.fullmatch(revision)), 'Invalid release revision')
+    path = root / revision
+    require(path.is_dir() and not path.is_symlink() and path.resolve() == path,
+            'Release directory is missing or symlinked: ' + revision)
+    require(not (path / '.git').exists() and not (path / '.git').is_symlink(),
+            'Refusing to remove or retain a working Git checkout')
+    for required in ['package.json', 'dist/server/index.js', 'node_modules/vinext/package.json']:
+        require((path / required).is_file(), 'Incomplete runtime release: ' + revision)
+    require(json.loads((path / 'package.json').read_text()).get('name') == 'tpl-reaction-lab',
+            'Unexpected release application')
+    return path
+
+
+def current_revision(root, live):
+    require(live.is_symlink(), 'Current runtime must be a symlink')
+    target = live.resolve(strict=True)
+    require(target.parent == root, 'Current runtime leaves the releases directory')
+    validate_release(root, target.name)
+    return target.name
+
+
+def check_unused(paths, proc_root=Path('/proc')):
+    # Never unlink a release still used through a cwd, executable, fd, or mmap.
+    if not paths:
+        return
+    prefixes = [str(path) for path in paths]
+    def in_target(value):
+        return any(value == p or value.startswith(p + '/') for p in prefixes)
+    for proc in proc_root.iterdir():
+        if not proc.name.isdigit():
+            continue
+        values = []
+        for name in ['cwd', 'exe']:
+            try:
+                values.append(os.readlink(proc / name))
+            except (FileNotFoundError, ProcessLookupError):
+                pass
+        try:
+            for fd in (proc / 'fd').iterdir():
+                try:
+                    values.append(os.readlink(fd))
+                except (FileNotFoundError, ProcessLookupError):
+                    pass
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+        try:
+            for line in (proc / 'maps').read_text().splitlines():
+                fields = line.split(maxsplit=5)
+                if len(fields) == 6:
+                    values.append(fields[5])
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+        require(not any(in_target(value) for value in values), 'Release is still used by process ' + proc.name)
+    mounts = proc_root / 'self/mountinfo'
+    if mounts.exists():
+        for line in mounts.read_text().splitlines():
+            mount = re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), line.split()[4])
+            require(not in_target(mount), 'Release contains a mounted filesystem')
+
+
+def write_state(path, kept):
+    fd, temporary = tempfile.mkstemp(prefix='.release-retention-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump({'schema_version': 1, 'releases': kept}, stream, indent=2)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def retain(root, live, state, *, initialize=False, rollbacks=(), activate=None,
+           apply=False, unused_guard=check_unused):
+    root = root.resolve(strict=True)
+    require(not state.is_symlink(), 'Retention state must not be a symlink')
+    current = current_revision(root, live)
+    if initialize:
+        require(not state.exists(), 'Retention is already initialized')
+        require(len(rollbacks) <= 2 and len(set(rollbacks)) == len(rollbacks)
+                and current not in rollbacks, 'Choose at most two distinct rollback revisions')
+        kept = [current, *rollbacks]
+    elif state.exists():
+        history = json.loads(state.read_text())
+        kept = history.get('releases', [])
+        require(history.get('schema_version') == 1 and 1 <= len(kept) <= 3
+                and len(set(kept)) == len(kept), 'Invalid retention history')
+    else:
+        existing = [p for p in root.iterdir() if REVISION.fullmatch(p.name)]
+        require(activate == current and len(existing) == 1,
+                'Initialize the two verified rollback revisions before cleanup')
+        kept = []
+    if activate:
+        require(activate == current, 'Successful activation must match the current runtime')
+        kept = [current, *[revision for revision in kept if revision != current]][:3]
+    require(kept[0] == current, 'History does not match the active runtime')
+    for revision in kept:
+        validate_release(root, revision)
+    candidates = [validate_release(root, p.name) for p in sorted(root.iterdir())
+                  if REVISION.fullmatch(p.name) and p.name not in kept]
+    identities = {p: (p.stat().st_dev, p.stat().st_ino) for p in candidates}
+    # Hard links are safe to unlink. Symlinks into an obsolete release would
+    # break a retained runtime, including imports not currently open by Node.
+    if candidates:
+        for revision in kept:
+            for directory, dirs, files in os.walk(root / revision, followlinks=False):
+                for name in dirs + files:
+                    path = Path(directory) / name
+                    if path.is_symlink():
+                        target = path.resolve()
+                        require(not any(target == old or old in target.parents for old in candidates),
+                                'A retained release links into an obsolete release')
+    unused_guard(candidates)
+    result = {'apply': apply, 'retained_releases': kept,
+              'remove_paths': [str(p) for p in candidates], 'removed_paths': []}
+    if apply:
+        require(current_revision(root, live) == current, 'Current runtime changed while planning')
+        write_state(state, kept)
+        for path in candidates:
+            require(current_revision(root, live) == current, 'Current runtime changed during cleanup')
+            for revision in kept:
+                validate_release(root, revision)
+            unused_guard([path])
+            require(not path.is_symlink() and (path.stat().st_dev, path.stat().st_ino) == identities[path],
+                    'Candidate directory changed during cleanup')
+            shutil.rmtree(path)
+            result['removed_paths'].append(str(path))
+        for revision in kept:
+            validate_release(root, revision)
+        require(current_revision(root, live) == current, 'Current runtime changed after cleanup')
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--initialize', action='store_true')
+    parser.add_argument('--rollback', action='append', default=[])
+    parser.add_argument('--activate')
+    parser.add_argument('--lock-fd', type=int)
+    parser.add_argument('--operations-only', nargs=2, metavar=('DEPLOYED', 'FETCHED'))
+    parser.add_argument('--repo', type=Path)
+    args = parser.parse_args()
+    if args.operations_only:
+        require(args.repo is not None, '--repo is required to classify a revision')
+        raise SystemExit(0 if operations_only(args.repo, *args.operations_only) else 1)
+    require(os.geteuid() == 0, 'Run release cleanup as root to verify all process references')
+    if args.lock_fd is None:
+        lock = DEFAULT_LOCK.open('a')
+        lock_fd = lock.fileno()
+    else:
+        lock_fd = args.lock_fd
+        require((os.fstat(lock_fd).st_dev, os.fstat(lock_fd).st_ino) ==
+                (DEFAULT_LOCK.stat().st_dev, DEFAULT_LOCK.stat().st_ino), 'Incorrect deployment lock')
+    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    print(json.dumps(retain(DEFAULT_ROOT, DEFAULT_LIVE, DEFAULT_STATE, initialize=args.initialize,
+                            rollbacks=args.rollback, activate=args.activate, apply=args.apply), indent=2))
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
+        raise SystemExit('release retention: ' + str(error))
