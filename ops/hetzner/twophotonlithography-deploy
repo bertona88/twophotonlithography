@@ -43,7 +43,11 @@ log() {
 }
 
 retain_releases() {
-  if ! "$RETAIN_PROGRAM" --lock-fd 9 --apply "$@"; then
+  local apply_args=()
+  if [ "$dry_run" -eq 0 ]; then
+    apply_args=(--apply)
+  fi
+  if ! "$RETAIN_PROGRAM" --lock-fd 9 "${apply_args[@]}" "$@"; then
     log "WARNING: release retention failed; inspect and rerun ${RETAIN_PROGRAM} --apply"
   fi
 }
