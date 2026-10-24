@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -183,6 +184,29 @@ class OperationsOnlyTests(unittest.TestCase):
     def test_identical_or_missing_revisions_are_not_classified_as_operations_only(self):
         self.assertFalse(retention.operations_only(self.repo, self.old, 'HEAD'))
         self.assertFalse(retention.operations_only(self.repo, 'missing', 'HEAD'))
+
+
+class DeployHookTests(unittest.TestCase):
+    def hook_arguments(self, dry_run):
+        script = PROGRAM.with_name('twophotonlithography-deploy').read_text()
+        function = re.search(r'(?ms)^retain_releases\(\) \{\n.*?^\}', script).group()
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / 'retain'
+            capture = Path(directory) / 'arguments'
+            fake.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" >"$CAPTURE"\n')
+            fake.chmod(0o755)
+            command = function + '\nRETAIN_PROGRAM=$1\ndry_run=$2\nlog() { :; }\nretain_releases --activate ' + C
+            subprocess.run(['bash', '-eu', '-c', command, 'test', str(fake), str(dry_run)],
+                           env={**os.environ, 'CAPTURE': str(capture)}, check=True)
+            return capture.read_text().splitlines()
+
+    def test_dry_run_never_authorizes_deletion(self):
+        arguments = self.hook_arguments(1)
+        self.assertNotIn('--apply', arguments)
+        self.assertEqual(arguments[-2:], ['--activate', C])
+
+    def test_normal_poll_authorizes_locked_retention(self):
+        self.assertEqual(self.hook_arguments(0), ['--lock-fd', '9', '--apply', '--activate', C])
 
 
 if __name__ == '__main__':
