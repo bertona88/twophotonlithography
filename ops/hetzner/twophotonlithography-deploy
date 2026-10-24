@@ -13,6 +13,7 @@ RELEASES_DIR="/srv/twophotonlithography-releases"
 LIVE_LINK="/srv/twophotonlithography/current"
 LIVE_PARENT="$(dirname "$LIVE_LINK")"
 LOCK_FILE="/run/twophotonlithography-deploy.lock"
+RETAIN_PROGRAM="/usr/local/sbin/twophotonlithography-retain-releases"
 
 force=0
 dry_run=0
@@ -39,6 +40,12 @@ done
 
 log() {
   printf '[twophotonlithography-deploy] %s\n' "$*"
+}
+
+retain_releases() {
+  if ! "$RETAIN_PROGRAM" --lock-fd 9 --apply "$@"; then
+    log "WARNING: release retention failed; inspect and rerun ${RETAIN_PROGRAM} --apply"
+  fi
 }
 
 rollback() {
@@ -82,7 +89,18 @@ if [ "$init_state" -eq 1 ]; then
 fi
 
 if [ "$force" -eq 0 ] && [ "$remote_revision" = "$deployed_revision" ]; then
+  retain_releases
   log "no changes at ${remote_revision}"
+  exit 0
+fi
+
+# Host operations and CI files are not runtime code. Keep the actual deployed
+# revision truthful and avoid rebuilding/restarting the app for maintenance.
+if [ "$force" -eq 0 ] && [[ "$deployed_revision" =~ ^[0-9a-f]{40}$ ]] &&
+  [ "$(readlink -f "$LIVE_LINK")" = "${RELEASES_DIR}/${deployed_revision}" ] &&
+  "$RETAIN_PROGRAM" --operations-only "$deployed_revision" "$remote_revision" --repo "$REPO_DIR"; then
+  retain_releases
+  log "operations-only revision ${remote_revision}; runtime remains ${deployed_revision}"
   exit 0
 fi
 
@@ -140,9 +158,6 @@ fi
 printf '%s\n' "$remote_revision" > "${STATE_FILE}.tmp"
 mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
-find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \
-  | sort -rn \
-  | awk 'NR > 5 {print $2}' \
-  | xargs -r rm -rf
+retain_releases --activate "$remote_revision"
 
 log "deployed ${remote_revision}"

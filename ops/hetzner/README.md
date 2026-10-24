@@ -13,7 +13,7 @@ The deploy user must have the same pinned toolchain as development:
 - the `wasm32-unknown-unknown` target
 - `wasm-pack 0.13.1`
 - Linux utilities required by the deployment scripts: `flock`, `curl`,
-  `sha256sum`, and GNU `timeout`
+  `sha256sum`, GNU `timeout`, and `python3`
 
 Install the Rust components before enabling automatic deployment:
 
@@ -37,6 +37,8 @@ After replacing the existing unit or deploy script, reload systemd:
 ```bash
 sudo install -m 0755 ops/hetzner/twophotonlithography-deploy \
   /usr/local/sbin/twophotonlithography-deploy
+sudo install -m 0755 ops/hetzner/twophotonlithography-retain-releases \
+  /usr/local/sbin/twophotonlithography-retain-releases
 sudo install -m 0644 ops/hetzner/twophotonlithography-deploy.service \
   /etc/systemd/system/twophotonlithography-deploy.service
 sudo systemctl daemon-reload
@@ -54,6 +56,37 @@ For a new revision, `/usr/local/sbin/twophotonlithography-deploy`:
 4. atomically switches `/srv/twophotonlithography/current`;
 5. restarts the localhost-only Vinext service; and
 6. rolls back the symlink if the local health check fails.
+
+After successful activation, retention keeps the active runtime and two
+successful rollback revisions, recorded in
+`/var/lib/twophotonlithography-deploy/release-retention.json`. Cleanup shares
+the deployer's lock, protects the active symlink, verifies complete retained
+runtimes, and refuses to remove releases referenced by processes or mounts.
+It unlinks only direct immutable release directories; shared dependency hard
+links continue to work in retained releases. Git checkouts and unknown or
+temporary entries are left in place. Cleanup failures are reported without
+undoing a healthy activation. Unchanged polling also retries retention.
+
+For an existing installation, explicitly initialize its two verified rollback
+revisions once. Without `--apply` this only previews:
+
+```bash
+sudo /usr/local/sbin/twophotonlithography-retain-releases --initialize \
+  --rollback PREVIOUS_FULL_SHA --rollback SECOND_ROLLBACK_FULL_SHA
+sudo /usr/local/sbin/twophotonlithography-retain-releases --initialize \
+  --rollback PREVIOUS_FULL_SHA --rollback SECOND_ROLLBACK_FULL_SHA --apply
+```
+
+Subsequent manual previews use the command without arguments; `--apply` removes
+the planned older releases. A new installation's first successful deployment
+initializes history automatically. Existing installations with missing history
+fail closed until the rollback revisions are selected explicitly.
+
+Changes limited to `ops/hetzner/` and `.github/workflows/ci.yml` do not rebuild
+or restart the running application. The live symlink and deployed-revision file
+continue to identify the actual running code; the next runtime change follows
+the full normal build/test/activation flow. Host operations scripts still need
+the explicit installation step above.
 
 The service listens only on `127.0.0.1:45180`. Nginx owns public HTTP and HTTPS,
 redirects `www` to the apex, and proxies the apex to the service.
